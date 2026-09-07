@@ -1,3 +1,4 @@
+import { collect } from "./players/collect.js";
 import { createApp } from "./app.js";
 import { envSchema } from "./config.js";
 import { createDatabase } from "./db/client.js";
@@ -14,6 +15,7 @@ const app = createApp({
   login: (input) => login(db, input),
   issueAccessToken: (player) => issueAccessToken(player, config.JWT_SECRET),
   verifyAccessToken: (token) => verifyAccessToken(token, config.JWT_SECRET),
+  collect: (playerId) => collect(db, playerId),
   findPlayerState: (playerId) => findPlayerState(db, playerId),
 });
 

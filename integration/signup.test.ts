@@ -1,3 +1,4 @@
+import { collect } from "../src/players/collect.js";
 import { findPlayerState } from "../src/players/queries.js";
 import { randomUUID } from "node:crypto";
 import { verify } from "argon2";
@@ -27,6 +28,7 @@ const app = createApp({
   login: (input) => login(db, input),
   issueAccessToken: (player) => issueAccessToken(player, config.JWT_SECRET),
   verifyAccessToken: (token) => verifyAccessToken(token, config.JWT_SECRET),
+  collect: (playerId) => collect(db, playerId),
   findPlayerState: (playerId) => findPlayerState(db, playerId),
 });
 const password = "a long test passphrase";

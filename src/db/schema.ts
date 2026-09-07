@@ -15,10 +15,12 @@ export const players = pgTable("players", {
 export const playerResources = pgTable("player_resources", {
   playerId: uuid("player_id").primaryKey().references(() => players.id, { onDelete: "cascade" }),
   gold: numeric("gold", { precision: 30, scale: 6 }).notNull().default("0"),
+  lifetimeGoldEarned: numeric("lifetime_gold_earned", { precision: 30, scale: 6 }).notNull().default("0"),
   goldPerSecond: numeric("gold_per_second", { precision: 30, scale: 6 }).notNull().default("1"),
-  lastCollectedAt: timestamp("last_collected_at", { withTimezone: true }).notNull().defaultNow(),
+  lastCollectedAt: timestamp("last_collected_at", { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 }, (table) => [
   check("gold_nonnegative", sql`${table.gold} >= 0 AND ${table.gold} <> 'NaN'::numeric`),
+  check("lifetime_gold_nonnegative", sql`${table.lifetimeGoldEarned} >= 0 AND ${table.lifetimeGoldEarned} <> 'NaN'::numeric`),
   check("gold_rate_nonnegative", sql`${table.goldPerSecond} >= 0 AND ${table.goldPerSecond} <> 'NaN'::numeric`),
 ]);
 

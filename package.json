@@ -15,7 +15,8 @@
     "db:migrate": "node --env-file=.env node_modules/drizzle-kit/bin.cjs migrate",
     "test:db": "node --env-file=.env node_modules/vitest/vitest.mjs run integration",
     "dev": "node --env-file=.env --watch --import tsx src/server.ts",
-    "verify": "npm run typecheck && npm test && npm run test:db && npm run build"
+    "verify": "npm run typecheck && npm test && npm run test:db && npm run build",
+    "test:race": "node scripts/check-collect-race.mjs"
   },
   "keywords": [],
   "author": "",

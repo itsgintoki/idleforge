@@ -8,6 +8,13 @@
       "when": 1788774668520,
       "tag": "0000_hesitant_rage",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788820858267,
+      "tag": "0001_icy_gauntlet",
+      "breakpoints": true
     }
   ]
 }

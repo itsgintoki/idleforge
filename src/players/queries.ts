@@ -40,6 +40,7 @@ export async function findPlayerState(db: Database, playerId: string): Promise<P
     player: { id: players.id, email: players.email, role: players.role, createdAt: players.createdAt },
     resources: {
       gold: playerResources.gold,
+      lifetimeGoldEarned: playerResources.lifetimeGoldEarned,
       goldPerSecond: playerResources.goldPerSecond,
       lastCollectedAt: playerResources.lastCollectedAt,
     },

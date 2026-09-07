@@ -22,7 +22,7 @@ function signPayload(payload: unknown) {
 function setup() {
   const state = {
     player: { id, email: "sam@example.com", role: "player" as const, createdAt: new Date() },
-    resources: { gold: "0.000000", goldPerSecond: "1.000000", lastCollectedAt: new Date() },
+    resources: { lifetimeGoldEarned: "0.000000", gold: "0.000000", goldPerSecond: "1.000000", lastCollectedAt: new Date() },
   };
   const findPlayerState = vi.fn<PlayerDependencies["findPlayerState"]>().mockResolvedValue(state);
   const app = createApp({
@@ -30,6 +30,7 @@ function setup() {
     login: async () => { throw new Error("Unexpected login"); },
     issueAccessToken: () => { throw new Error("Unexpected token issuance"); },
     verifyAccessToken: (token) => verifyAccessToken(token, secret),
+    collect: async () => { throw new Error("Unexpected collection"); },
     findPlayerState,
   });
   return { app, findPlayerState, state };

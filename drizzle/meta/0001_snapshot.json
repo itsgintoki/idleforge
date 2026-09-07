@@ -1,0 +1,157 @@
+{
+  "id": "363e97e1-31ac-46f6-941a-1cd3f04c527e",
+  "prevId": "5657d171-cbf4-4864-83d4-f767724148d7",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.player_resources": {
+      "name": "player_resources",
+      "schema": "",
+      "columns": {
+        "player_id": {
+          "name": "player_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "gold": {
+          "name": "gold",
+          "type": "numeric(30, 6)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "lifetime_gold_earned": {
+          "name": "lifetime_gold_earned",
+          "type": "numeric(30, 6)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "gold_per_second": {
+          "name": "gold_per_second",
+          "type": "numeric(30, 6)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'1'"
+        },
+        "last_collected_at": {
+          "name": "last_collected_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "player_resources_player_id_players_id_fk": {
+          "name": "player_resources_player_id_players_id_fk",
+          "tableFrom": "player_resources",
+          "tableTo": "players",
+          "columnsFrom": [
+            "player_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "gold_nonnegative": {
+          "name": "gold_nonnegative",
+          "value": "\"player_resources\".\"gold\" >= 0 AND \"player_resources\".\"gold\" <> 'NaN'::numeric"
+        },
+        "lifetime_gold_nonnegative": {
+          "name": "lifetime_gold_nonnegative",
+          "value": "\"player_resources\".\"lifetime_gold_earned\" >= 0 AND \"player_resources\".\"lifetime_gold_earned\" <> 'NaN'::numeric"
+        },
+        "gold_rate_nonnegative": {
+          "name": "gold_rate_nonnegative",
+          "value": "\"player_resources\".\"gold_per_second\" >= 0 AND \"player_resources\".\"gold_per_second\" <> 'NaN'::numeric"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.players": {
+      "name": "players",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "player_role",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'player'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "players_email_unique": {
+          "name": "players_email_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "email"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.player_role": {
+      "name": "player_role",
+      "schema": "public",
+      "values": [
+        "player",
+        "admin"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
