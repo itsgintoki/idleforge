@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { envSchema } from "../src/config.js";
 
 const databaseUrl = "postgresql://idleforge:idleforge_local@127.0.0.1:5434/idleforge";
-const baseEnv = { DATABASE_URL: databaseUrl };
+const baseEnv = { DATABASE_URL: databaseUrl, JWT_SECRET: "test-secret-".repeat(8) };
 
 describe("environment configuration", () => {
   it("defaults to port 3000 when PORT is missing", () => {
@@ -32,13 +32,23 @@ describe("database configuration", () => {
   });
 
   it("requires DATABASE_URL", () => {
-    expect(envSchema.safeParse({}).success).toBe(false);
+    expect(envSchema.safeParse({ JWT_SECRET: baseEnv.JWT_SECRET }).success).toBe(false);
   });
 
   it.each(["", "not-a-url", "https://example.com/db"])(
     "rejects invalid database URL %j",
     (url) => {
-      expect(envSchema.safeParse({ DATABASE_URL: url }).success).toBe(false);
+      expect(envSchema.safeParse({ ...baseEnv, DATABASE_URL: url }).success).toBe(false);
     },
   );
+});
+
+
+describe("JWT configuration", () => {
+  it("requires a signing secret", () => {
+    expect(envSchema.safeParse({ DATABASE_URL: databaseUrl }).success).toBe(false);
+  });
+  it.each(["", "short", "a".repeat(63)])("rejects insufficient secret length case %#", (secret) => {
+    expect(envSchema.safeParse({ ...baseEnv, JWT_SECRET: secret }).success).toBe(false);
+  });
 });

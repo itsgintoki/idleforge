@@ -1,9 +1,9 @@
 import { argon2id, hash } from "argon2";
 import type { Database } from "../db/client.js";
-import { players, playerResources, type Player } from "../db/schema.js";
+import { players, playerResources } from "../db/schema.js";
 import type { SignupInput } from "./schemas.js";
+import type { PublicPlayer } from "./types.js";
 
-export type PublicPlayer = Pick<Player, "id" | "email" | "role" | "createdAt">;
 export type SignupResult =
   | { ok: true; player: PublicPlayer }
   | { ok: false; reason: "email_taken" };

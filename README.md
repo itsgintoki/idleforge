@@ -7,6 +7,9 @@ Learning project: a TypeScript API for an idle-game economy.
 Requires Node.js 22.9+ and Docker Compose. Install dependencies with `npm ci`.
 Copy `.env.example` to `.env` if you do not already have local settings.
 The example credentials are for the local database in `compose.yaml`.
+Set `JWT_SECRET` in `.env` to a generated random secret (minimum 64 characters).
+Generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`.
+Keep it private; do not commit `.env`. Changing the secret invalidates existing tokens.
 
 ```sh
 npm run db:up
@@ -74,6 +77,56 @@ constraint handles concurrent duplicate signups. Only the public player projecti
 is returned; hashes and passwords are not included. The API receives its signup
 function through `createApp`, letting route tests supply a controlled implementation.
 
-Login, JWT authentication, and economy endpoints are not implemented yet.
+## Login credential verification
+
+`src/auth/login.ts` verifies a normalized email/password pair and returns either
+public player details or `invalid_credentials`. Unknown emails and incorrect
+passwords share the same result. Unknown emails still perform Argon2 verification
+against a dummy hash to avoid skipping the expensive verification step; this is
+not a guarantee of identical response timing. Stored hashes are verified, never
+compared with a newly generated hash. Database and corrupt-hash failures propagate
+as internal errors rather than being treated as incorrect credentials.
+
+Login accepts nonempty passwords up to 128 characters without changing their
+contents; signup's minimum length is a creation rule. Both input schemas share
+email normalization. Login schema validation must happen at the HTTP boundary,
+just as it does for signup.
+
+## Login endpoint and access tokens
+
+`POST /auth/login` accepts the same email/password fields as signup. On success,
+it returns 200 with `accessToken`, `tokenType: "Bearer"`, `expiresIn: 900`, and
+public `player` details. Responses containing tokens use `Cache-Control: no-store`.
+Invalid input returns 400. Unknown accounts and wrong passwords both return 401
+with `invalid_credentials`; internal failures return 500.
+
+Access tokens are signed using HS256 with `JWT_SECRET`, expire after 15 minutes,
+and include the player ID (`sub`), role, issuer (`idleforge`), audience
+(`idleforge-api`), issue time, and expiry time. They do not contain email,
+password, or password hash. Tokens are signed, not encrypted.
+
+## Protected player state
+
+`GET /player/me` requires `Authorization: Bearer <accessToken>`. Middleware
+verifies the HS256 signature, expiry, issuer, audience, and maximum token age,
+then validates the decoded payload with Zod. Signature verification alone does
+not establish the application's required claim types. No payload type assertion
+is used. Missing or invalid tokens return 401 with a Bearer challenge.
+
+The player ID comes from the verified `sub` claim. A query-string ID cannot
+select another player. The response contains public player fields and resource
+state; gold and rates remain exact strings. Missing player/resource state returns
+404, and database failures return 500. The role returned in player state is the
+current database role. Token roles are snapshots, not a live role lookup; future
+admin authorization must define how role changes are handled.
+
+Run `npm run dev` for automatic server restart on source changes. Run
+`npm run verify` for type-checking, unit/route tests, database integration tests,
+and the production build. Start the database and apply migrations first.
+
+Milestone 1's foundation, signup, login, and protected player state are implemented.
+Refresh tokens, collection/purchases, workers, readiness checks, and operational
+hardening belong to later work.
+
 The health endpoint is liveness only; it does not check database readiness.
 

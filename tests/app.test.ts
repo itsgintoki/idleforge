@@ -1,8 +1,9 @@
+import { unusedLoginDependencies } from "./helpers.js";
 import { describe, expect, it } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app.js";
 
-const app = createApp({ signup: async () => { throw new Error("Not used by these tests"); } });
+const app = createApp({ ...unusedLoginDependencies, signup: async () => { throw new Error("Not used by these tests"); } });
 
 describe("GET /health", () => {
     it("returns an ok status", async () => {

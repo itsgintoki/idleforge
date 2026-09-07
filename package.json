@@ -13,18 +13,22 @@
     "db:stop": "docker compose stop postgres",
     "db:generate": "node --env-file=.env node_modules/drizzle-kit/bin.cjs generate",
     "db:migrate": "node --env-file=.env node_modules/drizzle-kit/bin.cjs migrate",
-    "test:db": "node --env-file=.env node_modules/vitest/vitest.mjs run integration"
+    "test:db": "node --env-file=.env node_modules/vitest/vitest.mjs run integration",
+    "dev": "node --env-file=.env --watch --import tsx src/server.ts",
+    "verify": "npm run typecheck && npm test && npm run test:db && npm run build"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.4.1",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "drizzle-kit": "^0.31.10",
     "supertest": "^7.2.2",
+    "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
   },
@@ -32,6 +36,7 @@
     "argon2": "^0.45.1",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0",
     "zod": "^4.5.4"
   }
