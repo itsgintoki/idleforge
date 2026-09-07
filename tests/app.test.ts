@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
-import { app } from "../src/app.js";
+import { createApp } from "../src/app.js";
+
+const app = createApp({ signup: async () => { throw new Error("Not used by these tests"); } });
 
 describe("GET /health", () => {
     it("returns an ok status", async () => {
