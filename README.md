@@ -127,8 +127,9 @@ Run `npm run dev` for automatic server restart on source changes. Run
 and the production build. Start the database and apply migrations first.
 
 Milestones 1 and 2 are implemented: foundation, authentication, player state, and
-atomic offline collection. Purchases, workers, readiness checks, and operational
-hardening belong to later milestones. Refresh tokens are not implemented.
+atomic offline collection. Milestone 3 adds transactional building purchases
+with persisted idempotency keys and retry results. Workers, readiness checks, and
+operational hardening belong to later milestones. Refresh tokens are not implemented.
 
 The health endpoint is liveness only; it does not check database readiness.
 
@@ -215,3 +216,145 @@ update using stale values. The same concurrency test must fail its credited-tota
 assertion. The script removes the temporary copy; it never edits the working source.
 The disposable test databases are also removed. This proves that a passing race test
 is sensitive to the bug it is intended to catch.
+
+
+## Building purchases (Milestone 3)
+
+`POST /player/purchases` requires a Bearer token and an `Idempotency-Key` header.
+Keys are case-sensitive, 1–128 ASCII letters, digits, underscores, or hyphens.
+Generate a fresh key for each intentional purchase (for example, with
+`crypto.randomUUID()`), and reuse it when retrying that same command. Missing or
+invalid keys return 400 `invalid_input` before the purchase service runs.
+The body accepts exactly one JSON field:
+
+```json
+{ "building": "mine" }
+```
+
+The authenticated player ID always comes from the token. The client cannot supply
+price, target level, rate, or another player's ID. Unknown buildings and extra body
+fields return 400 `invalid_input`. A successful purchase or upgrade returns 200
+with `Cache-Control: no-store`:
+
+```json
+{
+  "building": "mine",
+  "level": 1,
+  "spent": "100.000000",
+  "credited": "0.000000",
+  "balance": "900.000000",
+  "lifetimeEarned": "1000.000000",
+  "rate": "2.000000",
+  "collectedAt": "2026-09-08T12:00:00.000Z"
+}
+```
+
+`credited` is passive gold settled at the old rate during the purchase. `balance`
+is the final balance after spending and settlement. `rate` is the new total rate.
+`GET /player/me` also returns a `buildings` array of `{ building, level }`, initially
+empty. The player and resource fields retain their existing names and formats.
+
+### Catalogue and pricing
+
+`src/buildings/catalogue.ts` supplies the prices and production effects. Its key
+schema supplies the shared building names for validation, TypeScript, and the
+PostgreSQL enum; the catalogue type requires an entry for every supported key.
+
+| Building key | First level price | Additional production per level |
+| --- | ---: | ---: |
+| `mine` | 100 gold | 1 gold/second |
+| `forge` | 500 gold | 5 gold/second |
+
+Every command buys one level. Price is `basePrice * nextLevel`: Mine levels 1, 2,
+and 3 cost 100, 200, and 300 respectively. Each building is capped at level 100.
+Prices are multiplied using BigInt and returned as fixed-six-decimal strings;
+resource arithmetic remains exact PostgreSQL numeric arithmetic. There is one
+building row per `(player_id, building_key)`, enforced by a composite primary key.
+The database enforces the level range and cascades building deletion with its player.
+
+### Transaction and rate changes
+
+The service locks the resource row first, sharing the same per-player lock used by
+collection. It reads the current building level and computes the next price only
+after acquiring that lock. A guarded SQL update deducts gold only if the stored
+balance is sufficient. Purchases of different building types share this lock because
+they spend the same balance.
+
+**Purchases spend already-collected gold.** Collect first if pending earnings are
+needed to afford the building. Insufficient funds returns 409 `insufficient_funds`
+and changes nothing, including the collection checkpoint. The level cap returns
+409 `max_level_reached`, also without changes. Missing accounts/resources return
+404 `player_not_found` / `resource_not_found`; unexpected failures return generic 500.
+
+After successful deduction, the service settles elapsed time through the existing
+collector at the OLD production rate, then creates/upgrades the building and raises
+the rate. This prevents a new rate from being applied to earlier offline time.
+The eight-hour cap, truncation, and nondecreasing checkpoint rules still apply.
+Spending never reduces lifetime earnings; passive settlement can increase them.
+Gold deduction, settlement, building mutation, and rate update all commit together.
+Failure at any point rolls all of them back, including numeric overflow.
+
+### Verification
+
+Run `npm run db:migrate` before `npm run verify`. The migration adds only the
+building enum and table. Integration tests use an isolated temporary database and
+prove exact spending, upgrades, insufficient funds, level caps, failure rollback,
+large values, old-rate settlement, and overlapping operations. Concurrency tests
+hold a blocker lock until both requests are waiting, then test one affordable
+purchase, updated upgrade pricing, purchases across building types, and collection
+concurrent with a purchase. The collection mutation proof still runs with
+`npm run test:race`.
+
+### Persisted retry handling (Part 2)
+
+The `purchase_commands` table has a composite primary key `(player_id,
+idempotency_key)`. Each record stores the requested building and its complete
+service result as JSON. Two players can independently use the same key. A
+repeated key for the same player is checked against its saved building:
+
+| Request | Outcome |
+| --- | --- |
+| New key | Reserve it, execute the purchase, and persist its result in one transaction |
+| Same key and building | Return the saved result without changing the economy |
+| Same key, different building | 409 `idempotency_key_reused`; the original command stays unchanged |
+
+A replay returns the original balance, credited amount, level, rate, and timestamp,
+even if later commands have changed the current state. Use `GET /player/me` to
+read current state. Both successful outcomes and expected domain failures such as
+`insufficient_funds`, `max_level_reached`, and `resource_not_found` are saved.
+An insufficient-funds result changes no economy state; its command record is saved.
+If funds later increase, the original key still returns that failure; use a new
+key for a new attempt. Authentication/validation failures and missing accounts do
+not reserve a key. Unexpected exceptions roll back both the economy mutations and
+the command reservation, allowing the same key to be retried.
+
+A small owner key-share lock prevents account deletion during execution. The command
+reservation comes before the resource-row lock. Concurrent identical keys wait on
+PostgreSQL's unique constraint: after the first transaction commits, the waiter
+reads its persisted result in a new READ COMMITTED statement. If the first attempt
+rolls back, the waiter can reserve the key and execute. This follows PostgreSQL's
+[conflict handling](https://www.postgresql.org/docs/17/sql-insert.html) and
+[row locking rules](https://www.postgresql.org/docs/17/explicit-locking.html).
+
+The result is saved before commit, so loss of the HTTP response after commit does
+not lose the result. Persisted results are runtime-validated with Zod, restoring
+ISO timestamp strings to Dates; malformed or incomplete records produce a generic
+500 rather than executing the purchase again. Records have no expiry in this
+milestone and are deleted with their owning player. Deleting a live command record
+would remove its retry protection; retention cleanup is not implemented.
+
+The tests additionally cover simultaneous identical keys, conflicting payloads,
+separate players using the same key, replay through a fresh database connection,
+stable failed outcomes, result-storage rollback, a waiting retry after rollback,
+corrupt stored results, and identical HTTP replay responses.
+
+Example request (use your own token and keep the key for retries):
+
+```http
+POST /player/purchases
+Authorization: Bearer <accessToken>
+Idempotency-Key: first-mine-001
+Content-Type: application/json
+
+{ "building": "mine" }
+```

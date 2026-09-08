@@ -1,4 +1,6 @@
-import { eq } from "drizzle-orm";
+import { buildingStateSchema } from "../buildings/catalogue.js";
+import { z } from "zod";
+import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { players, playerResources, type Player, type PlayerResource } from "../db/schema.js";
 import type { PublicPlayer } from "../auth/types.js";
@@ -31,12 +33,17 @@ export async function findPlayerByEmail(
 }
 
 export type PlayerState = {
+  buildings: z.infer<typeof buildingStateSchema>[];
   player: PublicPlayer;
   resources: Omit<PlayerResource, "playerId">;
 };
 
 export async function findPlayerState(db: Database, playerId: string): Promise<PlayerState | null> {
   const [state] = await db.select({
+    buildings: sql`coalesce((
+      SELECT jsonb_agg(jsonb_build_object('building', building_key, 'level', level) ORDER BY building_key)
+      FROM player_buildings WHERE player_id = ${players.id}
+    ), '[]'::jsonb)`.mapWith((value: unknown) => buildingStateSchema.array().parse(value)),
     player: { id: players.id, email: players.email, role: players.role, createdAt: players.createdAt },
     resources: {
       gold: playerResources.gold,

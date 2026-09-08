@@ -1,5 +1,6 @@
 // Fail loudly if a test unexpectedly reaches a dependency it did not configure.
 export const unusedPlayerDependencies = {
+  purchase: async () => { throw new Error("Purchase not configured in this test"); },
   collect: async () => { throw new Error("Collection not configured in this test"); },
   verifyAccessToken: () => { throw new Error("Token verification not configured in this test"); },
   findPlayerState: async () => { throw new Error("Player lookup not configured in this test"); },
