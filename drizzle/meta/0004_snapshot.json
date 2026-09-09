@@ -1,0 +1,344 @@
+{
+  "id": "d0885ec6-1d37-4214-b1f9-325b44bee01c",
+  "prevId": "1fdd1398-9e2e-4e1a-87bb-bc536a4cdf73",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.player_buildings": {
+      "name": "player_buildings",
+      "schema": "",
+      "columns": {
+        "player_id": {
+          "name": "player_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "building_key": {
+          "name": "building_key",
+          "type": "building_key",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "level": {
+          "name": "level",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "player_buildings_player_id_players_id_fk": {
+          "name": "player_buildings_player_id_players_id_fk",
+          "tableFrom": "player_buildings",
+          "tableTo": "players",
+          "columnsFrom": [
+            "player_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "player_buildings_player_id_building_key_pk": {
+          "name": "player_buildings_player_id_building_key_pk",
+          "columns": [
+            "player_id",
+            "building_key"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "building_level_range": {
+          "name": "building_level_range",
+          "value": "\"player_buildings\".\"level\" >= 1 AND \"player_buildings\".\"level\" <= 100"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.player_resources": {
+      "name": "player_resources",
+      "schema": "",
+      "columns": {
+        "player_id": {
+          "name": "player_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "gold": {
+          "name": "gold",
+          "type": "numeric(30, 6)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "lifetime_gold_earned": {
+          "name": "lifetime_gold_earned",
+          "type": "numeric(30, 6)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "gold_per_second": {
+          "name": "gold_per_second",
+          "type": "numeric(30, 6)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'1'"
+        },
+        "last_collected_at": {
+          "name": "last_collected_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "player_resources_player_id_players_id_fk": {
+          "name": "player_resources_player_id_players_id_fk",
+          "tableFrom": "player_resources",
+          "tableTo": "players",
+          "columnsFrom": [
+            "player_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "gold_nonnegative": {
+          "name": "gold_nonnegative",
+          "value": "\"player_resources\".\"gold\" >= 0 AND \"player_resources\".\"gold\" <> 'NaN'::numeric"
+        },
+        "lifetime_gold_nonnegative": {
+          "name": "lifetime_gold_nonnegative",
+          "value": "\"player_resources\".\"lifetime_gold_earned\" >= 0 AND \"player_resources\".\"lifetime_gold_earned\" <> 'NaN'::numeric"
+        },
+        "gold_rate_nonnegative": {
+          "name": "gold_rate_nonnegative",
+          "value": "\"player_resources\".\"gold_per_second\" >= 0 AND \"player_resources\".\"gold_per_second\" <> 'NaN'::numeric"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.players": {
+      "name": "players",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "player_role",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'player'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "players_email_unique": {
+          "name": "players_email_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "email"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.purchase_commands": {
+      "name": "purchase_commands",
+      "schema": "",
+      "columns": {
+        "player_id": {
+          "name": "player_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "building_key": {
+          "name": "building_key",
+          "type": "building_key",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "result": {
+          "name": "result",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "purchase_commands_player_id_players_id_fk": {
+          "name": "purchase_commands_player_id_players_id_fk",
+          "tableFrom": "purchase_commands",
+          "tableTo": "players",
+          "columnsFrom": [
+            "player_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "purchase_commands_player_id_idempotency_key_pk": {
+          "name": "purchase_commands_player_id_idempotency_key_pk",
+          "columns": [
+            "player_id",
+            "idempotency_key"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "purchase_key_format": {
+          "name": "purchase_key_format",
+          "value": "\"purchase_commands\".\"idempotency_key\" ~ '^[A-Za-z0-9_-]{1,128}$'"
+        },
+        "purchase_result_object": {
+          "name": "purchase_result_object",
+          "value": "\"purchase_commands\".\"result\" IS NULL OR jsonb_typeof(\"purchase_commands\".\"result\") = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.world_events": {
+      "name": "world_events",
+      "schema": "",
+      "columns": {
+        "occurrence_id": {
+          "name": "occurrence_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "bonus": {
+          "name": "bonus",
+          "type": "numeric(30, 6)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "players_rewarded": {
+          "name": "players_rewarded",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "applied_at": {
+          "name": "applied_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "world_bonus_positive": {
+          "name": "world_bonus_positive",
+          "value": "\"world_events\".\"bonus\" > 0 AND \"world_events\".\"bonus\" <> 'NaN'::numeric"
+        },
+        "world_event_completed": {
+          "name": "world_event_completed",
+          "value": "(\"world_events\".\"players_rewarded\" IS NULL AND \"world_events\".\"applied_at\" IS NULL)\n    OR (\"world_events\".\"players_rewarded\" >= 0 AND \"world_events\".\"applied_at\" IS NOT NULL AND \"world_events\".\"players_rewarded\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.building_key": {
+      "name": "building_key",
+      "schema": "public",
+      "values": [
+        "mine",
+        "forge"
+      ]
+    },
+    "public.player_role": {
+      "name": "player_role",
+      "schema": "public",
+      "values": [
+        "player",
+        "admin"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

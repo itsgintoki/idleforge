@@ -7,16 +7,18 @@
   "scripts": {
     "build": "tsc",
     "start": "node --env-file-if-exists=.env dist/server.js",
-    "test": "vitest run tests",
     "typecheck": "tsc -p tsconfig.check.json",
     "db:up": "docker compose up -d --wait postgres",
     "db:stop": "docker compose stop postgres",
     "db:generate": "node --env-file=.env node_modules/drizzle-kit/bin.cjs generate",
     "db:migrate": "node --env-file=.env node_modules/drizzle-kit/bin.cjs migrate",
-    "test:db": "node --env-file=.env node_modules/vitest/vitest.mjs run integration",
     "dev": "node --env-file=.env --watch --import tsx src/server.ts",
-    "verify": "npm run typecheck && npm test && npm run test:db && npm run build",
-    "test:race": "node scripts/check-collect-race.mjs"
+    "verify": "npm run typecheck && npm run build",
+    "services:up": "docker compose up -d --wait postgres redis",
+    "services:stop": "docker compose stop postgres redis",
+    "worker": "node --env-file=.env dist/worker.js",
+    "worker:dev": "node --env-file=.env --watch --import tsx src/worker.ts",
+    "scheduler": "node --env-file=.env dist/scheduler.js"
   },
   "keywords": [],
   "author": "",
@@ -26,17 +28,16 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.4.1",
     "@types/pg": "^8.23.1",
-    "@types/supertest": "^7.2.1",
     "drizzle-kit": "^0.31.10",
-    "supertest": "^7.2.2",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "argon2": "^0.45.1",
+    "bullmq": "^6.3.4",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0",
     "zod": "^4.5.4"

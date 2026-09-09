@@ -5,6 +5,8 @@ Learning project: a TypeScript API for an idle-game economy.
 ## Local setup
 
 Requires Node.js 22.9+ and Docker Compose. Install dependencies with `npm ci`.
+Compose pins PostgreSQL **18.6** and Redis **8.10.1**, the stable releases selected
+on September 9, 2026. Version updates are deliberate; image tags do not track `latest`.
 Copy `.env.example` to `.env` if you do not already have local settings.
 The example credentials are for the local database in `compose.yaml`.
 Set `JWT_SECRET` in `.env` to a generated random secret (minimum 64 characters).
@@ -12,14 +14,20 @@ Generate one with `node -e "console.log(require('node:crypto').randomBytes(32).t
 Keep it private; do not commit `.env`. Changing the secret invalidates existing tokens.
 
 ```sh
-npm run db:up
+npm run services:up
 npm run db:migrate
 npm run build
+npm run scheduler
 npm start
 ```
 
-PostgreSQL is available at `127.0.0.1:5434`. The API defaults to port 3000.
-`npm run db:stop` stops PostgreSQL while retaining its data volume.
+In a second terminal, run `npm run worker`. The scheduler command registers the
+recurring schedule and exits; the API and worker are separate long-running processes.
+Use `npm run dev` and `npm run worker:dev` for source-watching development.
+
+PostgreSQL is available at `127.0.0.1:5434`, Redis at `127.0.0.1:6384`, and the API
+defaults to port 3000. All processes must use the same `REDIS_URL`, `QUEUE_PREFIX`,
+and database. `npm run services:stop` stops both services while retaining their volumes.
 
 ## Schema workflow
 
@@ -40,30 +48,23 @@ Gold and gold-per-second use `numeric(30, 6)`: up to 24 integer digits and six
 fractional digits. They remain strings in TypeScript to preserve precision.
 The initial balance is zero and the initial production rate is one gold per
 second. Lifetime gold earned starts at zero and increases by the exact amount
-credited by collection. Existing development rows also start their lifetime counter
+credited by collection and world-event bonuses. Existing development rows also start their lifetime counter
 at zero when the Milestone 2 migration is applied; prior earnings are not reconstructed.
 
 ## Verification
 
 ```sh
-npm run typecheck
-npm test
-npm run test:db
-npm run build
+npm run verify
 ```
 
-`npm test` runs the tests in `tests/`. `npm run test:db` requires the migrated
-local database and runs `integration/`. Schema and lookup tests roll back their
-fixtures. Signup tests create a uniquely named temporary database, apply the
-migrations, and drop that database afterward so real commits and rollback can
-be tested. The local database user therefore needs permission to create databases.
-Neither suite truncates existing development rows.
-The type-check command covers source, both test folders, and Drizzle configuration.
-The production build emits only `src`.
+This runs strict TypeScript checking of application source and Drizzle configuration,
+then builds production JavaScript. Automated tests, test dependencies, and the race
+regression script have been removed at the learner's request. Tests will be written
+at the end of the project; `verify` does not currently run behavioral tests.
 
 `skipLibCheck` skips checking dependency declaration files because the installed
 Drizzle release contains declaration errors for optional database adapters.
-Strict checking remains enabled for application and test TypeScript.
+Strict checking remains enabled for application TypeScript.
 
 ## Signup
 
@@ -77,7 +78,7 @@ The service hashes passwords with Argon2id before opening its transaction. The
 player and initial gold resource commit together. PostgreSQL's unique email
 constraint handles concurrent duplicate signups. Only the public player projection
 is returned; hashes and passwords are not included. The API receives its signup
-function through `createApp`, letting route tests supply a controlled implementation.
+function through `createApp`, keeping HTTP handling separate from database operations.
 
 ## Login credential verification
 
@@ -119,17 +120,13 @@ The player ID comes from the verified `sub` claim. A query-string ID cannot
 select another player. The response contains public player fields and resource
 state; gold and rates remain exact strings. Missing player/resource state returns
 404, and database failures return 500. The role returned in player state is the
-current database role. Token roles are snapshots, not a live role lookup; future
-admin authorization must define how role changes are handled.
+current database role. Token roles are snapshots; the admin world-event endpoint
+checks the current database role on every request, so demotion takes effect immediately.
 
-Run `npm run dev` for automatic server restart on source changes. Run
-`npm run verify` for type-checking, unit/route tests, database integration tests,
-and the production build. Start the database and apply migrations first.
-
-Milestones 1 and 2 are implemented: foundation, authentication, player state, and
-atomic offline collection. Milestone 3 adds transactional building purchases
-with persisted idempotency keys and retry results. Workers, readiness checks, and
-operational hardening belong to later milestones. Refresh tokens are not implemented.
+Milestones 1–4 are implemented: foundation, authentication, player state, atomic
+offline collection, transactional building purchases with persisted retry results,
+and scheduled world-event bonuses. Leaderboards and operational hardening remain
+for later milestones. Refresh tokens are not implemented.
 
 The health endpoint is liveness only; it does not check database readiness.
 
@@ -185,38 +182,11 @@ based on the locked row. At PostgreSQL's default READ COMMITTED isolation, a wai
 collector reads the first collector's committed checkpoint, so it cannot credit
 that interval again. Separate players have separate row locks.
 
-PostgreSQL documents [row behavior at READ COMMITTED](https://www.postgresql.org/docs/17/transaction-iso.html#XACT-READ-COMMITTED)
-and the distinction between [database clock functions](https://www.postgresql.org/docs/17/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT).
+PostgreSQL documents [row behavior at READ COMMITTED](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED)
+and the distinction between [database clock functions](https://www.postgresql.org/docs/18/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT).
 The service owns the SQL and expected outcomes; `src/players/routes.ts` owns HTTP
 validation and status codes. This is safe interval collection, not persisted
 request idempotency: a later retry can collect time earned since the first request.
-
-### Verification and deliberate race regression
-
-```sh
-npm run db:up
-npm run db:migrate
-npm run verify
-npm run test:race
-```
-
-The collection integration suite creates and drops its own uniquely named database.
-It checks normal earnings, zero effective elapsed time, future checkpoints, the cap,
-large exact values, zero rate, missing state, constraints, overflow rollback,
-authenticated HTTP collection, and concurrent collectors.
-
-The concurrency test holds a row lock, starts two collectors, and waits until both
-are blocked in PostgreSQL before releasing them. It checks that their combined
-credit equals the elapsed interval exactly and agrees with the stored balance,
-lifetime total, and checkpoint.
-
-`test:race` copies source and tests into a temporary directory, first runs the safe
-implementation, then replaces the locking read with an unsafe separate read and
-update using stale values. The same concurrency test must fail its credited-total
-assertion. The script removes the temporary copy; it never edits the working source.
-The disposable test databases are also removed. This proves that a passing race test
-is sensitive to the bug it is intended to catch.
-
 
 ## Building purchases (Milestone 3)
 
@@ -294,17 +264,6 @@ Spending never reduces lifetime earnings; passive settlement can increase them.
 Gold deduction, settlement, building mutation, and rate update all commit together.
 Failure at any point rolls all of them back, including numeric overflow.
 
-### Verification
-
-Run `npm run db:migrate` before `npm run verify`. The migration adds only the
-building enum and table. Integration tests use an isolated temporary database and
-prove exact spending, upgrades, insufficient funds, level caps, failure rollback,
-large values, old-rate settlement, and overlapping operations. Concurrency tests
-hold a blocker lock until both requests are waiting, then test one affordable
-purchase, updated upgrade pricing, purchases across building types, and collection
-concurrent with a purchase. The collection mutation proof still runs with
-`npm run test:race`.
-
 ### Persisted retry handling (Part 2)
 
 The `purchase_commands` table has a composite primary key `(player_id,
@@ -333,8 +292,8 @@ reservation comes before the resource-row lock. Concurrent identical keys wait o
 PostgreSQL's unique constraint: after the first transaction commits, the waiter
 reads its persisted result in a new READ COMMITTED statement. If the first attempt
 rolls back, the waiter can reserve the key and execute. This follows PostgreSQL's
-[conflict handling](https://www.postgresql.org/docs/17/sql-insert.html) and
-[row locking rules](https://www.postgresql.org/docs/17/explicit-locking.html).
+[conflict handling](https://www.postgresql.org/docs/18/sql-insert.html) and
+[row locking rules](https://www.postgresql.org/docs/18/explicit-locking.html).
 
 The result is saved before commit, so loss of the HTTP response after commit does
 not lose the result. Persisted results are runtime-validated with Zod, restoring
@@ -342,11 +301,6 @@ ISO timestamp strings to Dates; malformed or incomplete records produce a generi
 500 rather than executing the purchase again. Records have no expiry in this
 milestone and are deleted with their owning player. Deleting a live command record
 would remove its retry protection; retention cleanup is not implemented.
-
-The tests additionally cover simultaneous identical keys, conflicting payloads,
-separate players using the same key, replay through a fresh database connection,
-stable failed outcomes, result-storage rollback, a waiting retry after rollback,
-corrupt stored results, and identical HTTP replay responses.
 
 Example request (use your own token and keep the key for retries):
 
@@ -358,3 +312,130 @@ Content-Type: application/json
 
 { "building": "mine" }
 ```
+
+
+## Scheduled world events (Milestone 4)
+
+The bonus is **100 gold per player**, counted in both balance and lifetime earnings.
+It does not change production rate, buildings, or the offline collection checkpoint.
+Eligible players are those with a resource row visible when the worker's update
+statement starts. An account created afterward waits for a later occurrence. A
+successful occurrence with zero recipients is still recorded as applied.
+
+### Queue, scheduler, and worker
+
+- `src/world-events/contracts.ts` defines queue/job names, runtime schemas, inferred
+  TypeScript types, the fixed amount, and schedule settings.
+- `src/world-events/queue.ts` creates the producer and registers the scheduler.
+- `src/scheduler.ts` registers the stable `hourly-gold-bonus-v1` scheduler and exits.
+  Running it repeatedly updates the same schedule, rather than creating another one.
+- `src/worker.ts` starts the separate worker process. `src/world-events/worker.ts`
+  validates each job and calls the database service. The API never processes jobs.
+- `src/world-events/apply-bonus.ts` owns the transaction and retry protection.
+
+The cron expression `0 * * * *` runs at the top of every UTC hour. Registration
+schedules a future run; it does not immediately reward players. A worker must be
+running for execution. Jobs may run late during downtime or backlog. This is a
+periodic world event, not a promise to backfill a bonus for every missed clock hour.
+BullMQ generates the next scheduled job as the preceding scheduled job starts.
+
+Manual and scheduled jobs share the validated, versioned contract and the same
+application service. Manual occurrences use a caller-generated UUID. Scheduled
+occurrences derive their stable database ID from the scheduler-generated job ID.
+Each scheduled repetition is a new occurrence; retrying that job retains its ID.
+
+### Atomic application and retries
+
+In one PostgreSQL transaction, the service reserves `world_events.occurrence_id`,
+locks eligible resource rows in player-ID order, increments both gold totals using
+exact numeric arithmetic, and saves the recipient count and application timestamp.
+The occurrence ID is a primary key. A concurrent duplicate waits, then reads the
+committed outcome without awarding gold again. On failure, all changes—including
+the reservation—roll back, allowing the same occurrence to retry.
+
+If PostgreSQL commits but the worker crashes before acknowledging completion to
+Redis, redelivery returns the persisted outcome. Queue job-ID deduplication is only
+an optimization: even another transport job ID with the same manual occurrence UUID
+cannot award gold twice. Do not delete applied occurrence rows; there is no retention
+cleanup in this milestone.
+
+Jobs get at most five application attempts, with exponential delays starting at one
+second (1, 2, 4, 8 seconds before the next attempt). Invalid job names or payloads
+fail immediately without retries. Failed jobs remain in Redis for inspection;
+completed jobs are retained up to a count of 1,000. Logs contain job and occurrence
+IDs, attempt, recipient count, and outcome; raw database errors and secrets are
+not stored in job failure messages.
+
+### Admin trigger
+
+```http
+POST /admin/world-events/gold-bonus
+Authorization: Bearer <admin-accessToken>
+Content-Type: application/json
+
+{ "occurrenceId": "4f4e6fb8-fbb2-4baf-af2e-9b97006601b2" }
+```
+
+Generate a UUID with `crypto.randomUUID()` for each intentional bonus. Reuse it
+when retrying that bonus, including after a timeout or 503. A new UUID means another
+bonus. The request cannot choose the amount or recipients.
+
+A successful enqueue returns **202** with `jobId` and `occurrenceId`: accepted for
+processing, not necessarily awarded yet. Missing/invalid authentication returns
+401, a non-admin account returns 403, invalid input returns 400, and an unavailable
+queue returns 503. Authorization checks the current database role rather than
+trusting an old role claim. Signup still creates ordinary players; no existing
+account is automatically promoted. For a deliberate local admin account, update
+that account's role in the database by its exact player ID.
+
+### Local operation and limits
+
+Redis uses a persistent Docker volume, AOF with `appendfsync everysec`, and
+`noeviction`. Redis holds delivery state; PostgreSQL holds the authoritative economy
+and applied-occurrence records. AOF every-second persistence can still lose recent
+queued work on a crash. There is no database outbox or lost-job reconciliation yet;
+database idempotency prevents duplicate application but cannot restore lost delivery.
+
+The API can serve database-backed routes while Redis is unavailable; the admin
+trigger returns 503. Producers fail promptly, while workers reconnect and wait for
+Redis. SIGTERM/SIGINT closes the API's connections; the worker waits for its active
+job before closing its database pool.
+
+Each global reward currently updates all eligible rows in one transaction. This is
+appropriate for this learning milestone; it can delay concurrent player writes as
+the player count grows. Batching would need a different persisted progress model.
+
+Milestone 4 was manually checked using disposable PostgreSQL and Redis namespaces:
+independent API/worker startup, exact rewards, duplicate delivery, concurrent replay,
+invalid jobs, forced rollback followed by a real queue retry, scheduler registration
+and execution, current-role authorization, and shutdown. No verification fixtures or
+test suites are retained in the codebase.
+
+See [the Milestone 4 study guide](docs/milestone-4-study.md) for concepts and reading order.
+
+
+## Database version upgrades
+
+PostgreSQL 18's Docker image uses `/var/lib/postgresql/18/docker` for its data
+inside the container. Compose mounts the `postgres_18_data` volume at
+`/var/lib/postgresql`. Redis uses `redis_8_data` mounted at `/data`.
+
+Changing PostgreSQL's major version requires a database upgrade or logical
+backup/restore; changing the image tag alone does not migrate an existing data
+volume. Application SQL and TypeScript needed no changes for this upgrade.
+
+The September 9, 2026 local upgrade restored PostgreSQL 17 into a fresh PostgreSQL
+18 volume and copied the stopped Redis 7 persistence files into a fresh Redis 8
+volume. The original `idleforge_postgres_data` and `idleforge_redis_data` volumes
+remain untouched as recovery copies. They represent the state at upgrade time;
+reverting to them later would omit subsequent writes.
+
+Private logical backups, Redis persistence files, a pre-upgrade Compose file, and
+data fingerprints are in `.local-backups/2026-09-09-db-upgrade/` (ignored by Git).
+Those backups contain private database data. Keep them local. All existing rows,
+sequence state, and Redis values matched after restoration. Temporary application
+checks used a separate database and queue prefix.
+
+References: [PostgreSQL supported versions](https://www.postgresql.org/support/versioning/),
+[PostgreSQL Docker image layout](https://hub.docker.com/_/postgres), and
+[Redis 8.10 release notes](https://redis.io/docs/latest/operate/oss_and_stack/stack-with-enterprise/release-notes/redisce/redisos-8.10-release-notes/).

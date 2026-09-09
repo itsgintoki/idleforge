@@ -51,3 +51,14 @@ export const purchaseCommands = pgTable("purchase_commands", {
   check("purchase_key_format", sql`${table.key} ~ ${sql.raw("'" + purchaseKeyPattern + "'")}`),
   check("purchase_result_object", sql`${table.result} IS NULL OR jsonb_typeof(${table.result}) = 'object'`),
 ]);
+
+export const worldEvents = pgTable("world_events", {
+  occurrenceId: text("occurrence_id").primaryKey(),
+  bonus: numeric("bonus", { precision: 30, scale: 6 }).notNull(),
+  playersRewarded: integer("players_rewarded"),
+  appliedAt: timestamp("applied_at", { withTimezone: true, precision: 3 }),
+}, (table) => [
+  check("world_bonus_positive", sql`${table.bonus} > 0 AND ${table.bonus} <> 'NaN'::numeric`),
+  check("world_event_completed", sql`(${table.playersRewarded} IS NULL AND ${table.appliedAt} IS NULL)
+    OR (${table.playersRewarded} >= 0 AND ${table.appliedAt} IS NOT NULL AND ${table.playersRewarded} IS NOT NULL)`),
+]);

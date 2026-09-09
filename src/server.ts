@@ -1,3 +1,5 @@
+import { createBonusQueue } from "./world-events/queue.js";
+import { findPlayerById } from "./players/queries.js";
 import { purchase } from "./players/purchase.js";
 import { collect } from "./players/collect.js";
 import { createApp } from "./app.js";
@@ -11,7 +13,10 @@ import { findPlayerState } from "./players/queries.js";
 const config = envSchema.parse(process.env);
 const port = config.PORT;
 const { db, pool } = createDatabase(config.DATABASE_URL);
+const bonusQueue = createBonusQueue(config.REDIS_URL, config.QUEUE_PREFIX);
 const app = createApp({
+  isAdmin: async (playerId) => (await findPlayerById(db, playerId))?.role === "admin",
+  enqueueBonus: (occurrenceId) => bonusQueue.enqueueManual(occurrenceId),
   signup: (input) => signup(db, input),
   login: (input) => login(db, input),
   issueAccessToken: (player) => issueAccessToken(player, config.JWT_SECRET),
@@ -29,8 +34,8 @@ const server = app.listen(port, () => {
 
 function shutdown() {
   server.close(() => {
-    void pool.end().catch(() => {
-      console.error("Database shutdown failed");
+    void Promise.all([pool.end(), bonusQueue.close()]).catch(() => {
+      console.error("API shutdown failed");
       process.exitCode = 1;
     });
   });

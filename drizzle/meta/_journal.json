@@ -29,6 +29,13 @@
       "when": 1788882225631,
       "tag": "0003_shallow_forgotten_one",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788974852199,
+      "tag": "0004_dazzling_jack_power",
+      "breakpoints": true
     }
   ]
 }

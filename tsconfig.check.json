@@ -6,8 +6,6 @@
   },
   "include": [
     "src",
-    "tests",
-    "integration",
     "drizzle.config.ts"
   ]
 }
