@@ -1,7 +1,6 @@
 import { Queue, type JobsOptions } from "bullmq";
 import { Redis } from "ioredis";
-import { bonusJobSchema, goldBonusCron, goldBonusJobName, goldBonusSchedulerId, worldEventQueueName, type BonusJobData } from "./contracts.js";
-import { logEvent } from "./log.js";
+import { bonusJobSchema, goldBonusCron, goldBonusJobName, goldBonusSchedulerId, logEvent, worldEventQueueName, type BonusJobData } from "./service.js";
 
 export const bonusJobOptions: JobsOptions = {
   attempts: 5,
@@ -21,7 +20,7 @@ export function createBonusQueue(redisUrl: string, prefix: string) {
   queue.on("error", () => logEvent("bonus_queue_error"));
   return {
     queue,
-    async enqueueManual(occurrenceId: string) {
+    async enqueueManual(occurrenceId: string): Promise<{ jobId: string | undefined; occurrenceId: string }> {
       const data = bonusJobSchema.parse({ source: "manual", version: 1, occurrenceId: occurrenceId.toLowerCase() });
       if (connection.status !== "ready") throw new Error("Bonus queue unavailable");
       // Job deduplication is an optimization. PostgreSQL remains the final guard,
@@ -29,7 +28,7 @@ export function createBonusQueue(redisUrl: string, prefix: string) {
       const job = await queue.add(goldBonusJobName, data, { jobId: `manual-${occurrenceId.toLowerCase()}` });
       return { jobId: job.id, occurrenceId: `manual-${occurrenceId.toLowerCase()}` };
     },
-    async waitUntilReady() {
+    async waitUntilReady(): Promise<void> {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
@@ -49,7 +48,7 @@ export function createBonusQueue(redisUrl: string, prefix: string) {
   };
 }
 
-export async function registerBonusSchedule(queue: Queue<BonusJobData>) {
+export async function registerBonusSchedule(queue: Queue<BonusJobData>): Promise<void> {
   await queue.upsertJobScheduler(goldBonusSchedulerId, { pattern: goldBonusCron, tz: "UTC" }, {
     name: goldBonusJobName,
     data: { source: "scheduled", version: 1, schedulerId: goldBonusSchedulerId },

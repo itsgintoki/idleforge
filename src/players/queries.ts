@@ -2,8 +2,7 @@ import { buildingStateSchema } from "../buildings/catalogue.js";
 import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { players, playerResources, type Player, type PlayerResource } from "../db/schema.js";
-import type { PublicPlayer } from "../auth/types.js";
+import { players, playerResources, type Player, type PlayerResource, type PublicPlayer } from "../db/schema.js";
 
 // Internal database row, including passwordHash; do not send it directly as JSON.
 // The caller must validate external IDs as UUIDs before calling this function.
@@ -17,6 +16,7 @@ export async function findPlayerById(
     .limit(1);
 
   return player ?? null;
+  
 }
 
 // Callers pass the email normalized by the signup/login schema.

@@ -1,15 +1,32 @@
 import { and, eq, gte, sql } from "drizzle-orm";
+import { z } from "zod";
 import type { Database } from "../db/client.js";
 import { playerBuildings, playerResources, players, purchaseCommands } from "../db/schema.js";
-import { buildingCatalogue, maximumBuildingLevel, priceForLevel, purchaseKeySchema, type BuildingKey, type PurchaseInput } from "../buildings/catalogue.js";
+import { buildingCatalogue, buildingStateSchema, maximumBuildingLevel, priceForLevel, purchaseKeySchema, type BuildingKey, type PurchaseInput } from "../buildings/catalogue.js";
 import { collect } from "./collect.js";
 
-import { purchaseResultSchema, type PurchaseResult } from "./purchase-result.js";
-export type { PurchaseResult } from "./purchase-result.js";
+const amount = z.string().regex(/^\d{1,24}\.\d{6}$/);
+export const purchaseResultSchema = z.discriminatedUnion("ok", [
+  buildingStateSchema.extend({
+    ok: z.literal(true),
+    spent: amount, credited: amount, balance: amount, lifetimeEarned: amount, rate: amount,
+    // Fresh results have Date objects; persisted JSON contains ISO strings.
+    collectedAt: z.union([z.date(), z.iso.datetime().pipe(z.coerce.date())]),
+  }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum(["player_not_found", "resource_not_found", "insufficient_funds", "max_level_reached", "idempotency_key_reused"]),
+  }),
+]);
+export type PurchaseResult = z.infer<typeof purchaseResultSchema>;
+
+type PreparedPurchase =
+  | { ok: true; level: number; spent: string }
+  | { ok: false; reason: "player_not_found" | "resource_not_found" | "max_level_reached" | "insufficient_funds" };
 
 // All economy commands lock the resource row first. This also serializes
 // purchases of different building types that spend the same player's gold.
-async function preparePurchase(tx: Database, playerId: string, building: BuildingKey) {
+async function preparePurchase(tx: Database, playerId: string, building: BuildingKey): Promise<PreparedPurchase> {
   const [resource] = await tx.select({ id: playerResources.playerId }).from(playerResources)
     .where(eq(playerResources.playerId, playerId)).for("update");
   if (!resource) {

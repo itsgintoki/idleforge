@@ -5,8 +5,7 @@ import { collect } from "./players/collect.js";
 import { createApp } from "./app.js";
 import { envSchema } from "./config.js";
 import { createDatabase } from "./db/client.js";
-import { signup } from "./auth/signup.js";
-import { login } from "./auth/login.js";
+import { login, signup } from "./auth/service.js";
 import { issueAccessToken, verifyAccessToken } from "./auth/tokens.js";
 import { findPlayerState } from "./players/queries.js";
 

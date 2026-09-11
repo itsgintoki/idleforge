@@ -2,11 +2,19 @@ import { Worker, UnrecoverableError, type Job } from "bullmq";
 import { Redis } from "ioredis";
 import { z } from "zod";
 import type { Database } from "../db/client.js";
-import { applyGoldBonus } from "./apply-bonus.js";
-import { bonusJobSchema, goldBonusJobName, occurrenceForJob, worldEventQueueName } from "./contracts.js";
-import { logEvent } from "./log.js";
+import {
+  applyGoldBonus,
+  bonusJobSchema,
+  goldBonusJobName,
+  logEvent,
+  occurrenceForJob,
+  worldEventQueueName,
+  type BonusResult,
+} from "./service.js";
 
-function validatedJob(job: Job<unknown>) {
+type JobContext = { occurrenceId: string; jobId: string; attempt: number };
+
+function validatedJob(job: Job<unknown>): JobContext {
   const data = bonusJobSchema.safeParse(job.data);
   const id = z.string().min(1).max(256).safeParse(job.id);
   if (job.name !== goldBonusJobName || !data.success || !id.success) {
@@ -18,7 +26,7 @@ function validatedJob(job: Job<unknown>) {
 export function createBonusWorker(db: Database, redisUrl: string, prefix: string) {
   const connection = new Redis(redisUrl, { maxRetriesPerRequest: null, connectTimeout: 5000 });
   connection.on("error", () => logEvent("redis_worker_error"));
-  const worker = new Worker<unknown>(worldEventQueueName, async (job) => {
+  const worker = new Worker<unknown>(worldEventQueueName, async (job): Promise<BonusResult> => {
     const context = validatedJob(job);
     logEvent("bonus_started", context);
     try {

@@ -3,7 +3,7 @@ import type { PurchaseResult } from "./purchase.js";
 import { z } from "zod";
 import type { CollectResult } from "./collect.js";
 import { Router } from "express";
-import { createAuthentication, type VerifyAccessToken } from "../auth/middleware.js";
+import { createAuthentication, type VerifyAccessToken } from "../auth/tokens.js";
 import type { PlayerState } from "./queries.js";
 
 const collectBodySchema = z.strictObject({}).optional();

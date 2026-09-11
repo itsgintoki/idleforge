@@ -1,7 +1,7 @@
 import { workerEnvSchema } from "./config.js";
 import { createDatabase } from "./db/client.js";
 import { createBonusWorker } from "./world-events/worker.js";
-import { logEvent } from "./world-events/log.js";
+import { logEvent } from "./world-events/service.js";
 
 const config = workerEnvSchema.parse(process.env);
 const { db, pool } = createDatabase(config.DATABASE_URL);

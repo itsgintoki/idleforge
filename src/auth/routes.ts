@@ -1,8 +1,13 @@
 import { Router } from "express";
-import { signupSchema, loginSchema, type SignupInput, type LoginInput } from "./schemas.js";
-import type { SignupResult } from "./signup.js";
-import type { LoginResult } from "./login.js";
-import type { PublicPlayer } from "./types.js";
+import type { PublicPlayer } from "../db/schema.js";
+import {
+  loginSchema,
+  signupSchema,
+  type LoginInput,
+  type LoginResult,
+  type SignupInput,
+  type SignupResult,
+} from "./service.js";
 import { accessTokenLifetimeSeconds } from "./tokens.js";
 
 export type Signup = (input: SignupInput) => Promise<SignupResult>;

@@ -2,6 +2,27 @@
 
 Learning project: a TypeScript API for an idle-game economy.
 
+## Source map
+
+The application uses 19 source files:
+
+```text
+src/
+├── auth/          service.ts  routes.ts  tokens.ts
+├── players/       queries.ts  collect.ts  purchase.ts  routes.ts
+├── world-events/  service.ts  queue.ts  worker.ts  routes.ts
+├── db/            client.ts  schema.ts
+├── buildings/     catalogue.ts
+└──                app.ts  config.ts  server.ts  worker.ts  scheduler.ts
+```
+
+Small functions that change together live together: authentication schemas and
+account operations are in `auth/service.ts`, while world-event contracts, logging,
+and bonus application are in `world-events/service.ts`. HTTP handlers stay in
+`routes.ts` files, database connection and schema concerns stay in `db/`, and the
+API, worker, and scheduler startup files stay at the source root. Grow a new split
+only when one of these files becomes hard to navigate.
+
 ## Local setup
 
 Requires Node.js 22.9+ and Docker Compose. Install dependencies with `npm ci`.
@@ -36,9 +57,10 @@ Read the generated SQL in `drizzle/` before applying it with `npm run db:migrate
 Commit both the SQL migrations and their metadata. Do not edit migrations after
 they have been applied; generate a new migration for subsequent changes.
 
-`src/roles.ts` supplies the shared player/admin values to Zod, TypeScript, and
-the PostgreSQL enum. `src/db/client.ts` creates a connection pool and a typed
-Drizzle client; callers must close the pool when they are finished.
+`src/db/schema.ts` defines the shared player/admin role values used by Zod,
+TypeScript, and the PostgreSQL enum. It also exports `PublicPlayer`, the TypeScript
+projection safe to return through the API. `src/db/client.ts` creates a connection
+pool and a typed Drizzle client; callers must close the pool when they are finished.
 
 Players have unique emails. Resource rows use the player ID as both their
 primary key and foreign key, allowing at most one resource row per player.
@@ -82,7 +104,7 @@ function through `createApp`, keeping HTTP handling separate from database opera
 
 ## Login credential verification
 
-`src/auth/login.ts` verifies a normalized email/password pair and returns either
+`src/auth/service.ts` verifies a normalized email/password pair and returns either
 public player details or `invalid_credentials`. Unknown emails and incorrect
 passwords share the same result. Unknown emails still perform Argon2 verification
 against a dummy hash to avoid skipping the expensive verification step; this is
@@ -324,14 +346,14 @@ successful occurrence with zero recipients is still recorded as applied.
 
 ### Queue, scheduler, and worker
 
-- `src/world-events/contracts.ts` defines queue/job names, runtime schemas, inferred
-  TypeScript types, the fixed amount, and schedule settings.
+- `src/world-events/service.ts` defines queue/job names, runtime schemas, inferred
+  TypeScript types, the fixed amount, structured logging, and the transactional
+  bonus application with retry protection.
 - `src/world-events/queue.ts` creates the producer and registers the scheduler.
 - `src/scheduler.ts` registers the stable `hourly-gold-bonus-v1` scheduler and exits.
   Running it repeatedly updates the same schedule, rather than creating another one.
 - `src/worker.ts` starts the separate worker process. `src/world-events/worker.ts`
   validates each job and calls the database service. The API never processes jobs.
-- `src/world-events/apply-bonus.ts` owns the transaction and retry protection.
 
 The cron expression `0 * * * *` runs at the top of every UTC hour. Registration
 schedules a future run; it does not immediately reward players. A worker must be
@@ -410,8 +432,6 @@ independent API/worker startup, exact rewards, duplicate delivery, concurrent re
 invalid jobs, forced rollback followed by a real queue retry, scheduler registration
 and execution, current-role authorization, and shutdown. No verification fixtures or
 test suites are retained in the codebase.
-
-See [the Milestone 4 study guide](docs/milestone-4-study.md) for concepts and reading order.
 
 
 ## Database version upgrades

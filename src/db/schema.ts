@@ -1,7 +1,11 @@
 import { buildingKeySchema, maximumBuildingLevel, purchaseKeyPattern } from "../buildings/catalogue.js";
 import { sql } from "drizzle-orm";
 import { check, jsonb, integer, primaryKey, numeric, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
-import { playerRoles } from "../roles.js";
+import { z } from "zod";
+
+export const playerRoles = ["player", "admin"] as const;
+export const roleSchema = z.enum(playerRoles);
+export type PlayerRole = z.infer<typeof roleSchema>;
 
 export const playerRole = pgEnum("player_role", playerRoles);
 
@@ -26,6 +30,7 @@ export const playerResources = pgTable("player_resources", {
 ]);
 
 export type Player = typeof players.$inferSelect;
+export type PublicPlayer = Pick<Player, "id" | "email" | "role" | "createdAt">;
 export type NewPlayer = typeof players.$inferInsert;
 export type PlayerResource = typeof playerResources.$inferSelect;
 

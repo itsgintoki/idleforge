@@ -1,7 +1,6 @@
 import { Router } from "express";
-import { createAuthentication, type VerifyAccessToken } from "../auth/middleware.js";
-import { manualBonusSchema } from "./contracts.js";
-import { logEvent } from "./log.js";
+import { createAuthentication, type VerifyAccessToken } from "../auth/tokens.js";
+import { logEvent, manualBonusSchema } from "./service.js";
 
 export type WorldEventDependencies = {
   verifyAccessToken: VerifyAccessToken;
