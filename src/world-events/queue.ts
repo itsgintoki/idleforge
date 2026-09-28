@@ -9,6 +9,13 @@ export const bonusJobOptions: JobsOptions = {
   removeOnFail: false,
 };
 
+export type FailedBonusJob = {
+  jobId: string;
+  attemptsMade: number;
+  failedReason: string;
+  finishedOn: number | null;
+};
+
 export function createBonusQueue(redisUrl: string, prefix: string) {
   const connection = new Redis(redisUrl, {
     maxRetriesPerRequest: 1, enableOfflineQueue: false, connectTimeout: 5000, commandTimeout: 5000,
@@ -23,8 +30,6 @@ export function createBonusQueue(redisUrl: string, prefix: string) {
     async enqueueManual(occurrenceId: string): Promise<{ jobId: string | undefined; occurrenceId: string }> {
       const data = bonusJobSchema.parse({ source: "manual", version: 1, occurrenceId: occurrenceId.toLowerCase() });
       if (connection.status !== "ready") throw new Error("Bonus queue unavailable");
-      // Job deduplication is an optimization. PostgreSQL remains the final guard,
-      // including after completed jobs have been removed from Redis.
       const job = await queue.add(goldBonusJobName, data, { jobId: `manual-${occurrenceId.toLowerCase()}` });
       return { jobId: job.id, occurrenceId: `manual-${occurrenceId.toLowerCase()}` };
     },
@@ -40,6 +45,16 @@ export function createBonusQueue(redisUrl: string, prefix: string) {
       } finally {
         clearTimeout(timer);
       }
+    },
+    async getFailedJobs(limit: number): Promise<FailedBonusJob[]> {
+      const count = Math.min(Math.max(limit, 1), 100);
+      const jobs = await queue.getFailed(0, count - 1);
+      return jobs.map((job) => ({
+        jobId: job.id ?? "unknown",
+        attemptsMade: job.attemptsMade,
+        failedReason: String(job.failedReason ?? "unknown").slice(0, 500),
+        finishedOn: job.finishedOn ?? null,
+      }));
     },
     async close() {
       connection.disconnect();

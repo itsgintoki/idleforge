@@ -10,7 +10,6 @@ export const purchaseResultSchema = z.discriminatedUnion("ok", [
   buildingStateSchema.extend({
     ok: z.literal(true),
     spent: amount, credited: amount, balance: amount, lifetimeEarned: amount, rate: amount,
-    // Fresh results have Date objects; persisted JSON contains ISO strings.
     collectedAt: z.union([z.date(), z.iso.datetime().pipe(z.coerce.date())]),
   }),
   z.object({
@@ -24,8 +23,6 @@ type PreparedPurchase =
   | { ok: true; level: number; spent: string }
   | { ok: false; reason: "player_not_found" | "resource_not_found" | "max_level_reached" | "insufficient_funds" };
 
-// All economy commands lock the resource row first. This also serializes
-// purchases of different building types that spend the same player's gold.
 async function preparePurchase(tx: Database, playerId: string, building: BuildingKey): Promise<PreparedPurchase> {
   const [resource] = await tx.select({ id: playerResources.playerId }).from(playerResources)
     .where(eq(playerResources.playerId, playerId)).for("update");
@@ -49,8 +46,6 @@ async function executePurchase(tx: Database, playerId: string, input: PurchaseIn
   const prepared = await preparePurchase(tx, playerId, input.building);
   if (!prepared.ok) return prepared;
 
-  // Settle elapsed time at the OLD rate in this same transaction. Spending
-  // requires already-collected gold; an unsuccessful purchase never collects.
   const settlement = await collect(tx, playerId);
   if (!settlement.ok) throw new Error("Locked purchase resource disappeared");
   await tx.insert(playerBuildings).values({ playerId, building: input.building, level: prepared.level })
@@ -67,8 +62,6 @@ async function executePurchase(tx: Database, playerId: string, input: PurchaseIn
 }
 
 async function replayPurchase(tx: Database, playerId: string, key: string, input: PurchaseInput): Promise<PurchaseResult> {
-  // A new statement gets a fresh READ COMMITTED snapshot after a conflicting
-  // insert finishes waiting. The first command's result is now visible.
   const [command] = await tx.select().from(purchaseCommands)
     .where(and(eq(purchaseCommands.playerId, playerId), eq(purchaseCommands.key, key)));
   if (!command) throw new Error("Reserved purchase command disappeared");
@@ -81,8 +74,6 @@ export async function purchase(
 ): Promise<PurchaseResult> {
   const key = purchaseKeySchema.parse(idempotencyKey);
   return db.transaction(async (tx): Promise<PurchaseResult> => {
-    // Keep the owner alive while reserving a command; compatible key-share locks
-    // allow purchases for the same player to proceed to command/resource locking.
     const [player] = await tx.select({ id: players.id }).from(players)
       .where(eq(players.id, playerId)).for("key share");
     if (!player) return { ok: false, reason: "player_not_found" };

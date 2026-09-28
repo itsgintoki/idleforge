@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.local-backups/
+.git/
+drizzle/*.json
+npm-debug.log

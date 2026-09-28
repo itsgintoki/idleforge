@@ -18,7 +18,11 @@
     "services:stop": "docker compose stop postgres redis",
     "worker": "node --env-file=.env dist/worker.js",
     "worker:dev": "node --env-file=.env --watch --import tsx src/worker.ts",
-    "scheduler": "node --env-file=.env dist/scheduler.js"
+    "scheduler": "node --env-file=.env dist/scheduler.js",
+    "scheduler:dev": "node --env-file=.env --watch --import tsx src/scheduler.ts",
+    "leaderboard:rebuild": "node --env-file=.env --import tsx src/leaderboard/rebuild.ts",
+    "load:test": "node scripts/load-test.mjs",
+    "demo": "node scripts/demo.mjs"
   },
   "keywords": [],
   "author": "",

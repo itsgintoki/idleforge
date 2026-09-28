@@ -1,27 +1,109 @@
 # IdleForge
 
-Learning project: a TypeScript API for an idle-game economy.
+Learning project: a TypeScript API for an idle-game economy. Strict TypeScript,
+Express, PostgreSQL (Drizzle ORM), Redis + BullMQ, Zod validation, Argon2id
+passwords, and JWT access tokens.
 
-## Source map
-
-The application uses 19 source files:
+## Project structure
 
 ```text
 src/
-├── auth/          service.ts  routes.ts  tokens.ts
-├── players/       queries.ts  collect.ts  purchase.ts  routes.ts
-├── world-events/  service.ts  queue.ts  worker.ts  routes.ts
-├── db/            client.ts  schema.ts
-├── buildings/     catalogue.ts
-└──                app.ts  config.ts  server.ts  worker.ts  scheduler.ts
+├── auth/          service.ts (signup/login)  routes.ts (HTTP)  tokens.ts (JWT)
+├── players/       collect.ts (offline earning)  purchase.ts (buildings)
+│                  queries.ts (state reads)  routes.ts (HTTP)
+├── world-events/  service.ts (contracts + bonus tx)  queue.ts (producer)
+│                  worker.ts (consumer)  routes.ts (admin HTTP)
+├── leaderboard/   client.ts (Redis conn)  queries.ts (PG snapshot)
+│                  score.ts (exact<->float)  store.ts (Sorted Set + Lua publish)
+│                  service.ts (sync + reconcile)  routes.ts (HTTP)  rebuild.ts (CLI)
+├── db/            client.ts (pool)  schema.ts (tables)
+├── buildings/     catalogue.ts (prices + rates)
+├── observability.ts (request IDs + request logging)
+├── rate-limit.ts  (in-memory fixed-window limiters)
+└──               app.ts (wiring)  config.ts (env)  server.ts (API)
+                   worker.ts (bonus worker)  scheduler.ts (cron register)
+docs/              architecture.md  invariants.md  failures.md
+                   deployment.md  load-test.md  demo.md
+scripts/           demo.mjs  load-test.mjs
+                   repro-concurrency.sh  repro-idempotency.sh  repro-reconciliation.sh
+drizzle/           versioned SQL migrations (commit these, never edit applied ones)
+.github/           workflows/ci.yml (typecheck + build + docker build)
+Dockerfile         one image; CMD selects api / worker / scheduler
+compose.yaml       postgres + redis + api + worker + scheduler
 ```
 
-Small functions that change together live together: authentication schemas and
-account operations are in `auth/service.ts`, while world-event contracts, logging,
-and bonus application are in `world-events/service.ts`. HTTP handlers stay in
-`routes.ts` files, database connection and schema concerns stay in `db/`, and the
-API, worker, and scheduler startup files stay at the source root. Grow a new split
-only when one of these files becomes hard to navigate.
+Conventions: HTTP handling lives in `routes.ts` files, database logic in
+`service.ts`/`collect.ts`/`purchase.ts`, connection/schema concerns in `db/`,
+and process entrypoints (`server.ts`, `worker.ts`, `scheduler.ts`) at the
+source root. Small functions that change together live together; grow a new
+split only when a file becomes hard to navigate.
+
+## Architecture
+
+```text
+client -> API (server.js) ---> PostgreSQL (economy, idempotency, occurrences)
+client -> API ----------------> Redis (leaderboard projection, BullMQ queue)
+scheduler (one-shot) ---------> Redis (registers hourly schedule, exits)
+worker -----------------------> PostgreSQL + Redis (applies bonuses, reconciles)
+```
+
+- **API** never processes jobs. It commits to PostgreSQL first, then refreshes
+  the leaderboard projection. It serves DB-backed routes even when Redis is down.
+- **Worker** applies world-event bonuses transactionally, then reconciles the
+  leaderboard (startup, Redis reconnect, every 60 s, after each bonus).
+- **Scheduler** upserts the `hourly-gold-bonus-v1` cron (`0 * * * *` UTC) and exits.
+- **Leaderboard pipeline**: `lifetimeGoldEarned -> integer millionths ->
+  ZADD GT -> staging set -> Lua RENAME publish -> ranked reads`. PostgreSQL is
+  authoritative; Redis is an absolute-value projection. Details in
+  `docs/architecture.md`, guarantees in `docs/invariants.md`, outages in
+  `docs/failures.md`.
+
+Request path (`app.ts`, in order): `X-Request-ID` handling + structured request
+logging (`observability.ts`), 16 KB JSON limit, liveness `GET /health`, readiness
+`GET /ready` (PG `SELECT 1` + Redis `PING`), then rate-limited routers
+(`rate-limit.ts`). Every log line is JSON with `time`, `level`, `event`, and
+`requestId`. See `docs/deployment.md` (GitHub-only delivery),
+`docs/load-test.md` (harness + results), `docs/demo.md` (demo + repro scripts).
+
+## Routes
+
+| Method + path | Auth | Success | Notable failures |
+| --- | --- | --- | --- |
+| `GET /health` | none | 200 `{status:"ok"}` (liveness, no DB/Redis touch) | — |
+| `GET /ready` | none | 200 `{status:"ready"}` | 503 `{status:"not_ready"}` when PG or Redis down |
+| `GET /` | none | 200 `{name, version}` | — |
+| `POST /auth/signup` | none | 201 `{player}` | 400 invalid, 409 `email_taken` |
+| `POST /auth/login` | none | 200 `{accessToken, tokenType, expiresIn, player}` | 400 invalid, 401 `invalid_credentials` |
+| `GET /player/me` | Bearer | 200 `{player, resources, buildings}` | 401, 404 `player_state_not_found` |
+| `POST /player/collect` | Bearer | 200 `{credited, balance, lifetimeEarned, rate, collectedAt}` | 400 extra fields, 401, 404 |
+| `POST /player/purchases` | Bearer + `Idempotency-Key` | 200 purchase result | 400 invalid, 404, 409 `insufficient_funds`/`max_level_reached`/`idempotency_key_reused` |
+| `GET /leaderboard?limit=` | Bearer | 200 `{entries, me, lastReconciledAt}` | 400 bad limit, 401, 503 `leaderboard_unavailable` |
+| `POST /admin/world-events/gold-bonus` | Bearer admin | 202 `{jobId, occurrenceId}` | 400, 401, 403 `forbidden`, 503 `queue_unavailable` |
+| `GET /admin/world-events/jobs/failed?limit=` | Bearer admin | 200 `{jobs: [{jobId, attemptsMade, failedReason, finishedOn}]}` | 400, 401, 403, 503 |
+
+Rate limits (429 `rate_limited` + `Retry-After`): `/auth` 100 per 15 min per IP;
+`/player` and `/leaderboard` 300/min per player; `/admin/world-events` 60/min.
+Token responses and player reads use `Cache-Control: no-store`. Tokens are
+HS256, 15-minute expiry, `sub` = player ID; admin routes recheck the live
+database role on every request, so demotion is immediate.
+
+## Database
+
+PostgreSQL is the source of truth; money stays `numeric(30, 6)` and travels as
+exact strings (never JS numbers).
+
+| Table | Purpose |
+| --- | --- |
+| `players` | id, unique email, Argon2id hash, `player`/`admin` role |
+| `player_resources` | one row per player: `gold`, `lifetime_gold_earned`, `gold_per_second`, `last_collected_at` |
+| `player_buildings` | `(player_id, building_key)` levels for `mine`/`forge` |
+| `purchase_commands` | `(player_id, idempotency_key)` → requested building + persisted result |
+| `world_events` | `occurrence_id` PK → bonus, recipients, applied timestamp |
+
+Redis holds only recoverable projections: BullMQ delivery state and the
+leaderboard Sorted Set (plus its `:ready` completeness marker, 90 s TTL).
+Losing Redis never loses money: bonuses replay from `world_events`, the
+leaderboard rebuilds via `npm run leaderboard:rebuild`.
 
 ## Local setup
 
@@ -37,7 +119,7 @@ Keep it private; do not commit `.env`. Changing the secret invalidates existing 
 ```sh
 npm run services:up
 npm run db:migrate
-npm run build
+npm run verify
 npm run scheduler
 npm start
 ```
@@ -71,7 +153,7 @@ fractional digits. They remain strings in TypeScript to preserve precision.
 The initial balance is zero and the initial production rate is one gold per
 second. Lifetime gold earned starts at zero and increases by the exact amount
 credited by collection and world-event bonuses. Existing development rows also start their lifetime counter
-at zero when the Milestone 2 migration is applied; prior earnings are not reconstructed.
+at zero when the lifetime-earnings migration is applied; prior earnings are not reconstructed.
 
 ## Verification
 
@@ -79,10 +161,11 @@ at zero when the Milestone 2 migration is applied; prior earnings are not recons
 npm run verify
 ```
 
-This runs strict TypeScript checking of application source and Drizzle configuration,
-then builds production JavaScript. Automated tests, test dependencies, and the race
-regression script have been removed at the learner's request. Tests will be written
-at the end of the project; `verify` does not currently run behavioral tests.
+This checks application source and Drizzle configuration with strict TypeScript,
+then builds production JavaScript. Automated tests are deferred until the final
+revision phase. There is currently no retained test suite; this command does not
+prove concurrency, outage, or recovery guarantees. PostgreSQL and Redis are not
+required for this build check.
 
 `skipLibCheck` skips checking dependency declaration files because the installed
 Drizzle release contains declaration errors for optional database adapters.
@@ -145,16 +228,24 @@ state; gold and rates remain exact strings. Missing player/resource state return
 current database role. Token roles are snapshots; the admin world-event endpoint
 checks the current database role on every request, so demotion takes effect immediately.
 
-Milestones 1–4 are implemented: foundation, authentication, player state, atomic
+Implemented: foundation, authentication, player state, atomic
 offline collection, transactional building purchases with persisted retry results,
-and scheduled world-event bonuses. Leaderboards and operational hardening remain
-for later milestones. Refresh tokens are not implemented.
+scheduled world-event bonuses, a Redis leaderboard, and operational hardening
+(rate limits, request IDs, readiness, failed-job inspection, load harness).
+Delivery packaging (Docker/CI/docs/demo scripts) is implemented; hosted deployment
+and the final proof test suite remain. Refresh tokens are not implemented.
 
 The health endpoint is liveness only; it does not check database readiness.
+Use `GET /ready` for PostgreSQL + Redis readiness (200 ready, 503 not_ready).
+
+All responses carry `X-Request-ID` (pass your own to correlate); logs are JSON
+with `time`, `level`, `event`, and `requestId`. Targeted rate limits return 429
+`rate_limited` with `Retry-After`: `/auth` 100/15 min per IP, `/player` and
+`/leaderboard` 300/min per player, `/admin/world-events` 60/min.
 
 
 
-## Offline collection (Milestone 2)
+## Offline collection
 
 `POST /player/collect` requires a Bearer access token and accepts no body or `{}`.
 Extra JSON fields return 400. The authenticated token supplies the player ID;
@@ -210,7 +301,7 @@ The service owns the SQL and expected outcomes; `src/players/routes.ts` owns HTT
 validation and status codes. This is safe interval collection, not persisted
 request idempotency: a later retry can collect time earned since the first request.
 
-## Building purchases (Milestone 3)
+## Building purchases
 
 `POST /player/purchases` requires a Bearer token and an `Idempotency-Key` header.
 Keys are case-sensitive, 1–128 ASCII letters, digits, underscores, or hyphens.
@@ -320,8 +411,8 @@ rolls back, the waiter can reserve the key and execute. This follows PostgreSQL'
 The result is saved before commit, so loss of the HTTP response after commit does
 not lose the result. Persisted results are runtime-validated with Zod, restoring
 ISO timestamp strings to Dates; malformed or incomplete records produce a generic
-500 rather than executing the purchase again. Records have no expiry in this
-milestone and are deleted with their owning player. Deleting a live command record
+500 rather than executing the purchase again. Records have no expiry
+and are deleted with their owning player. Deleting a live command record
 would remove its retry protection; retention cleanup is not implemented.
 
 Example request (use your own token and keep the key for retries):
@@ -336,7 +427,7 @@ Content-Type: application/json
 ```
 
 
-## Scheduled world events (Milestone 4)
+## Scheduled world events
 
 The bonus is **100 gold per player**, counted in both balance and lifetime earnings.
 It does not change production rate, buildings, or the offline collection checkpoint.
@@ -379,12 +470,14 @@ If PostgreSQL commits but the worker crashes before acknowledging completion to
 Redis, redelivery returns the persisted outcome. Queue job-ID deduplication is only
 an optimization: even another transport job ID with the same manual occurrence UUID
 cannot award gold twice. Do not delete applied occurrence rows; there is no retention
-cleanup in this milestone.
+cleanup.
 
 Jobs get at most five application attempts, with exponential delays starting at one
 second (1, 2, 4, 8 seconds before the next attempt). Invalid job names or payloads
 fail immediately without retries. Failed jobs remain in Redis for inspection;
-completed jobs are retained up to a count of 1,000. Logs contain job and occurrence
+completed jobs are retained up to a count of 1,000. Admins can inspect them at
+`GET /admin/world-events/jobs/failed?limit=20` (Bearer admin token, 200 with
+`{ jobs: [{ jobId, attemptsMade, failedReason, finishedOn }] }`). Logs contain job and occurrence
 IDs, attempt, recipient count, and outcome; raw database errors and secrets are
 not stored in job failure messages.
 
@@ -424,14 +517,74 @@ Redis. SIGTERM/SIGINT closes the API's connections; the worker waits for its act
 job before closing its database pool.
 
 Each global reward currently updates all eligible rows in one transaction. This is
-appropriate for this learning milestone; it can delay concurrent player writes as
+appropriate at this scale; it can delay concurrent player writes as
 the player count grows. Batching would need a different persisted progress model.
 
-Milestone 4 was manually checked using disposable PostgreSQL and Redis namespaces:
-independent API/worker startup, exact rewards, duplicate delivery, concurrent replay,
-invalid jobs, forced rollback followed by a real queue retry, scheduler registration
-and execution, current-role authorization, and shutdown. No verification fixtures or
-test suites are retained in the codebase.
+Automated proofs of concurrency, duplicate delivery, rollback, retry exhaustion,
+and recovery will be added during the final revision phase. Until then use the
+repro scripts: `scripts/repro-concurrency.sh`, `scripts/repro-idempotency.sh`,
+and `scripts/repro-reconciliation.sh` (see `docs/demo.md`). Load harness:
+`npm run load:test` (see `docs/load-test.md`). Demo: `npm run demo`.
+CI (`.github/workflows/ci.yml`) runs `npm run verify` plus a Docker build with
+PostgreSQL/Redis services. `Dockerfile` + `compose.yaml` package `api`/`worker`/`scheduler`.
+
+## Leaderboard
+
+```text
+PostgreSQL lifetimeGoldEarned -> exact integer millionths -> Redis Sorted Set -> ranked reads
+```
+
+`GET /leaderboard?limit=20` requires a Bearer token. `limit` defaults to 20 and
+accepts integers from 1 through 100; unknown parameters and malformed limits return
+400. The response contains `entries`, the authenticated player's entry as `me`
+(or null when absent from the projection), and `lastReconciledAt`. Each entry has
+`rank`, `playerId`, and an exact six-decimal `lifetimeGoldEarned` string. Emails and
+password fields are never included. Responses use `Cache-Control: no-store`.
+
+Ranks are positions starting at 1. Higher scores appear first; equal scores use
+descending player-ID byte order and receive distinct positions. Top entries and
+the caller's rank are read in one Redis transaction.
+
+Successful signup, collection, and purchase commands synchronize after PostgreSQL
+commits. Purchase replays synchronize a fresh database total, not their historical
+response. `ZADD GT` writes absolute totals and ignores delayed smaller totals;
+repeating a synchronization does not add gold. Spending does not reduce lifetime
+earnings, while purchases can increase them through offline settlement. Failures
+in synchronization are logged without changing a committed command's result.
+
+The worker reconciles on startup, Redis reconnect, every 60 seconds, and after
+world-event application or replay. Overlapping requests share a refresh and request
+another pass when necessary. API and worker own separate leaderboard connections
+with bounded Redis command timeouts and no offline command queue.
+
+To populate or repair the leaderboard manually:
+
+```sh
+npm run leaderboard:rebuild
+```
+
+Reconciliation reads a complete PostgreSQL snapshot, prepares a temporary sorted
+set in batches, then atomically replaces the live set and its completeness marker.
+It also repairs deleted Redis state and removes obsolete members. Temporary keys
+expire if the process crashes. Only the leaderboard namespace is affected; BullMQ
+keys and PostgreSQL balances are untouched.
+
+The marker expires 90 seconds after the database read starts. Missing, expired,
+invalid, or detectably incomplete projections return 503 `leaderboard_unavailable`.
+During a PostgreSQL outage, Redis can serve the last usable projection until this
+deadline. A Redis outage makes leaderboard reads unavailable while database-backed
+economy operations remain independent. A valid zero-player snapshot returns an
+empty leaderboard. Single-player synchronization cannot mark a partial set complete.
+
+Limits: full refreshes currently load all players into memory and target standalone
+Redis. Reads are eventually consistent: a snapshot replacement can temporarily
+supersede a newer individual synchronization; the next refresh repairs the gap.
+`lastReconciledAt` is the start of the latest published full database read, not a
+claim that every displayed score reflects the latest commit. Freshness checks assume
+synchronized process/Redis clocks. The exact-score representation supports at most
+**9007199254.740991 gold** per player. Detecting a larger or malformed total invalidates
+the projection; PostgreSQL earnings are never capped or rounded to fit Redis. A
+wider ranking representation is required to support the full `numeric(30,6)` range.
 
 
 ## Database version upgrades

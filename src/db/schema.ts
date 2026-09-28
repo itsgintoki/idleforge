@@ -44,7 +44,6 @@ export const playerBuildings = pgTable("player_buildings", {
   check("building_level_range", sql`${table.level} >= 1 AND ${table.level} <= ${sql.raw(String(maximumBuildingLevel))}`),
 ]);
 
-// The row is reserved and its result filled in within the SAME transaction.
 export const purchaseCommands = pgTable("purchase_commands", {
   playerId: uuid("player_id").notNull().references(() => players.id, { onDelete: "cascade" }),
   key: text("idempotency_key").notNull(),

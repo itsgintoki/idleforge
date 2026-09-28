@@ -4,7 +4,6 @@ export const buildingKeySchema = z.enum(["mine", "forge"]);
 export type BuildingKey = z.infer<typeof buildingKeySchema>;
 export const maximumBuildingLevel = 100;
 
-// Whole-gold base prices; BigInt multiplication keeps upgrade pricing exact.
 export const buildingCatalogue = {
   mine: { name: "Mine", basePrice: "100", rateIncrease: "1.000000" },
   forge: { name: "Forge", basePrice: "500", rateIncrease: "5.000000" },
@@ -24,7 +23,6 @@ export function priceForLevel(building: BuildingKey, nextLevel: number): string 
   return `${BigInt(buildingCatalogue[building].basePrice) * BigInt(nextLevel)}.000000`;
 }
 
-// A key identifies one command, is case-sensitive, and is never normalized.
 export const purchaseKeyPattern = "^[A-Za-z0-9_-]{1,128}$";
 export const purchaseKeySchema = z.string().regex(new RegExp(purchaseKeyPattern));
 export const purchaseRequestSchema = z.object({ body: purchaseSchema, key: purchaseKeySchema });

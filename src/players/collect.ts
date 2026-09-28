@@ -10,7 +10,6 @@ const collectionSchema = z.object({
   balance: z.string(),
   lifetimeEarned: z.string(),
   rate: z.string(),
-  // Raw Drizzle SQL returns PostgreSQL timestamps as strings.
   collectedAt: z.string().pipe(z.coerce.date()),
 });
 
@@ -19,9 +18,6 @@ export type CollectResult =
   | { ok: false; reason: "player_not_found" | "resource_not_found" };
 
 export async function collect(db: Database, playerId: string): Promise<CollectResult> {
-  // Lock before reading the values used for arithmetic. At READ COMMITTED,
-  // a waiting collector receives the previous collector's committed row.
-  // MATERIALIZED keeps time sampling after the lock and evaluates it only once.
   const result = await db.execute(sql`
     WITH locked AS MATERIALIZED (
       SELECT * FROM player_resources WHERE player_id = ${playerId}::uuid FOR UPDATE
@@ -48,7 +44,6 @@ export async function collect(db: Database, playerId: string): Promise<CollectRe
   const row: unknown = result.rows[0];
   if (row !== undefined) return { ok: true, ...collectionSchema.parse(row) };
 
-  // No mutation occurred. Distinguish missing account from missing resource state.
   const [player] = await db.select({ id: players.id }).from(players)
     .where(eq(players.id, playerId)).limit(1);
   return { ok: false, reason: player ? "resource_not_found" : "player_not_found" };

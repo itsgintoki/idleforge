@@ -23,7 +23,9 @@ function validatedJob(job: Job<unknown>): JobContext {
   return { occurrenceId: occurrenceForJob(data.data, id.data), jobId: id.data, attempt: job.attemptsMade + 1 };
 }
 
-export function createBonusWorker(db: Database, redisUrl: string, prefix: string) {
+export function createBonusWorker(
+  db: Database, redisUrl: string, prefix: string, afterBonus?: () => Promise<void>,
+) {
   const connection = new Redis(redisUrl, { maxRetriesPerRequest: null, connectTimeout: 5000 });
   connection.on("error", () => logEvent("redis_worker_error"));
   const worker = new Worker<unknown>(worldEventQueueName, async (job): Promise<BonusResult> => {
@@ -31,11 +33,15 @@ export function createBonusWorker(db: Database, redisUrl: string, prefix: string
     logEvent("bonus_started", context);
     try {
       const result = await applyGoldBonus(db, context.occurrenceId);
+      try {
+        await afterBonus?.();
+      } catch {
+        logEvent("bonus_leaderboard_refresh_failed", context);
+      }
       logEvent(result.replayed ? "bonus_replayed" : "bonus_applied", { ...context, playersRewarded: result.playersRewarded });
       return result;
     } catch {
       logEvent("bonus_application_failed", context);
-      // Avoid persisting raw SQL/connection details in BullMQ's failedReason.
       throw new Error("World bonus application failed");
     }
   }, { connection, prefix, concurrency: 1 });

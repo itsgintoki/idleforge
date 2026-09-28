@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Database } from "../db/client.js";
+import { getRequestId } from "../observability.js";
 import { worldEvents } from "../db/schema.js";
 
 export const worldEventQueueName = "world-events";
@@ -28,13 +29,18 @@ export type BonusResult = z.infer<typeof bonusResultSchema>;
 
 export function occurrenceForJob(data: BonusJobData, jobId: string): string {
   if (data.source === "manual") return `manual-${data.occurrenceId.toLowerCase()}`;
-  // Scheduler templates are static. BullMQ assigns a stable unique job ID to
-  // each repetition; retries of that job therefore derive the same event ID.
   return `scheduled-${createHash("sha256").update(jobId).digest("hex")}`;
 }
 
 export function logEvent(event: string, fields: Record<string, unknown> = {}): void {
-  console.log(JSON.stringify({ time: new Date().toISOString(), event, ...fields }));
+  const requestId = getRequestId();
+  console.log(JSON.stringify({
+    time: new Date().toISOString(),
+    level: "info",
+    event,
+    ...(requestId === undefined ? {} : { requestId }),
+    ...fields,
+  }));
 }
 
 export async function applyGoldBonus(db: Database, rawOccurrenceId: string): Promise<BonusResult> {
@@ -47,9 +53,6 @@ export async function applyGoldBonus(db: Database, rawOccurrenceId: string): Pro
       return bonusResultSchema.parse({ ...existing, replayed: true });
     }
 
-    // Lock recipients in a consistent order across world-event workers. A single
-    // statement selects the eligible resource rows and adds exact numeric gold.
-    // Accounts created after this statement's snapshot do not receive this event.
     const updated = await tx.execute(sql`
       WITH recipients AS MATERIALIZED (
         SELECT player_id FROM player_resources ORDER BY player_id FOR UPDATE

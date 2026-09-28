@@ -1,11 +1,14 @@
 import { Router } from "express";
+import { z } from "zod";
 import { createAuthentication, type VerifyAccessToken } from "../auth/tokens.js";
 import { logEvent, manualBonusSchema } from "./service.js";
+import type { FailedBonusJob } from "./queue.js";
 
 export type WorldEventDependencies = {
   verifyAccessToken: VerifyAccessToken;
   isAdmin: (playerId: string) => Promise<boolean>;
   enqueueBonus: (occurrenceId: string) => Promise<{ jobId: string | undefined; occurrenceId: string }>;
+  getFailedJobs: (limit: number) => Promise<readonly FailedBonusJob[]>;
 };
 export function createWorldEventRouter(dependencies: WorldEventDependencies) {
   const router = Router();
@@ -29,7 +32,22 @@ export function createWorldEventRouter(dependencies: WorldEventDependencies) {
       logEvent("bonus_enqueued", { ...queued, playerId: req.auth?.sub });
       res.set("Cache-Control", "no-store").status(202).json(queued);
     } catch {
-      // A timeout can happen after enqueueing: retry with the SAME occurrence ID.
+      res.status(503).json({ error: "queue_unavailable" });
+    }
+  });
+  router.get("/jobs/failed", async (req, res) => {
+    const parsed = z.strictObject({
+      limit: z.string().regex(/^\d+$/).transform(Number)
+        .pipe(z.number().int().min(1).max(100)).default(20),
+    }).safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_input" });
+      return;
+    }
+    try {
+      const jobs = await dependencies.getFailedJobs(parsed.data.limit);
+      res.set("Cache-Control", "no-store").status(200).json({ jobs });
+    } catch {
       res.status(503).json({ error: "queue_unavailable" });
     }
   });

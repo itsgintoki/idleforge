@@ -8,7 +8,6 @@ const emailSchema = z.string().trim().toLowerCase().max(254).pipe(z.email());
 
 export const signupSchema = z.strictObject({
   email: emailSchema,
-  // Preserve the user's password exactly: no trimming or case conversion.
   password: z.string().min(12).max(128),
 });
 
@@ -16,7 +15,6 @@ export type SignupInput = z.infer<typeof signupSchema>;
 
 export const loginSchema = z.strictObject({
   email: emailSchema,
-  // Login verifies an existing password rather than reapplying signup's minimum.
   password: z.string().min(1).max(128),
 });
 
@@ -50,8 +48,6 @@ export async function signup(db: Database, input: SignupInput): Promise<SignupRe
   });
 }
 
-// Not an account credential. Unknown emails still perform Argon2 verification,
-// avoiding an immediate return that would make missing accounts much faster.
 const dummyHash = "$argon2id$v=19$m=65536,p=4,t=3$NSza1gzBBLGlqWnJo57w7g$FH5lx9pQwiBRvcw25716w/kQYrX9JO75f9wd9p7twe4";
 
 export type LoginResult =

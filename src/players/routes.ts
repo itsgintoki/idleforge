@@ -20,7 +20,6 @@ export function createPlayerRouter(dependencies: PlayerDependencies) {
   router.use(createAuthentication(dependencies.verifyAccessToken));
 
   router.get("/me", async (req, res) => {
-    // The property is optional in Express's type because public routes lack it.
     if (!req.auth) {
       res.status(401).json({ error: "unauthorized" });
       return;
@@ -40,7 +39,6 @@ export function createPlayerRouter(dependencies: PlayerDependencies) {
       res.status(401).json({ error: "unauthorized" });
       return;
     }
-    // The command has no client-controlled amount, time, or player ID.
     const body: unknown = req.body;
     if (!collectBodySchema.safeParse(body).success) {
       res.status(400).json({ error: "invalid_input" });
