@@ -19,7 +19,16 @@ export async function syncPlayerLeaderboard(
     else await writeLeaderboardScore(redis, key, playerId, lifetimeGold);
   } catch (error) {
     const invalidScore = error instanceof RangeError || error instanceof TypeError;
-    if (invalidScore) await redis.del(`${key}:ready`).catch(() => {});
+    if (invalidScore) {
+      try {
+        await redis.del(`${key}:ready`);
+      } catch (invalidationError) {
+        const message = invalidationError instanceof Error ? invalidationError.message : String(invalidationError);
+        logEvent("leaderboard_ready_invalidation_failed", {
+          playerId, reason: "invalid_score", level: "error", error: message,
+        });
+      }
+    }
     logEvent("leaderboard_player_sync_failed", {
       playerId, reason: invalidScore ? "invalid_score" : "unavailable",
     });
@@ -58,7 +67,16 @@ export async function reconcileLeaderboard(
   } catch (error) {
     const reason = error instanceof RangeError ? "score_out_of_range"
       : error instanceof TypeError ? "invalid_score" : "unavailable";
-    if (reason !== "unavailable") await redis.del(`${key}:ready`).catch(() => {});
+    if (reason !== "unavailable") {
+      try {
+        await redis.del(`${key}:ready`);
+      } catch (invalidationError) {
+        const message = invalidationError instanceof Error ? invalidationError.message : String(invalidationError);
+        logEvent("leaderboard_ready_invalidation_failed", {
+          reason, level: "error", error: message,
+        });
+      }
+    }
     logEvent("leaderboard_reconcile_failed", { reason });
     return { ok: false, reason };
   }

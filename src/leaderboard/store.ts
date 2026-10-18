@@ -1,6 +1,7 @@
 import type { Redis } from "ioredis";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { logEvent } from "../world-events/service.js";
 import { fromLeaderboardScore, toLeaderboardScore } from "./score.js";
 
 export const leaderboardRefreshMs = 60_000;
@@ -128,6 +129,15 @@ export async function publishLeaderboardSnapshot(
     );
     return z.union([z.literal(0), z.literal(1)]).parse(published) === 1;
   } finally {
-    await redis.del(stagingKey).catch(() => {});
+    // Cleanup is best-effort: staging keys are written with a 5-minute TTL, and a
+    // failure here must be logged, not thrown, so it cannot mask the original error.
+    try {
+      await redis.del(stagingKey);
+    } catch (error) {
+      logEvent("leaderboard_staging_cleanup_failed", {
+        stagingKey, level: "error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }

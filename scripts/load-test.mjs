@@ -20,7 +20,14 @@ async function one(path) {
   const start = performance.now();
   try {
     const res = await fetch(`${baseUrl}${path}`, { headers });
-    await res.arrayBuffer().catch(() => {});
+    try {
+      await res.arrayBuffer();
+    } catch (error) {
+      // The status line was already received, so the request still counts in the
+      // report; surface the truncated/failed download instead of hiding it.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`load-test: failed to read response body for ${path}: ${message}`);
+    }
     return { ms: performance.now() - start, status: res.status };
   } catch {
     return { ms: performance.now() - start, status: 0 };

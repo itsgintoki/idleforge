@@ -10,7 +10,8 @@ surface; local Docker Compose is the reproducible runtime.
 - `npm ci` + `npm run verify` (strict typecheck + build)
 - boots PostgreSQL 18.6 + Redis 8.10.1 as service containers
 - builds the Docker image
-- reserves a step for `npm test` once the revision-phase suite exists
+- has a placeholder step for revision-phase integration tests; the repo has no
+  test script or test suite yet
 
 ## Run it locally (prod-like)
 
