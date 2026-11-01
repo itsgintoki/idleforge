@@ -14,7 +14,8 @@ import { readLeaderboard } from "./leaderboard/store.js";
 import { logEvent } from "./world-events/service.js";
 
 const config = envSchema.parse(process.env);
-const port = config.PORT;
+// INTENTIONAL FAILURE FOR CAUSENT TESTING: wrong type assignment
+const port: number = "invalid_port_string";
 const { db, pool } = createDatabase(config.DATABASE_URL);
 const bonusQueue = createBonusQueue(config.REDIS_URL, config.QUEUE_PREFIX);
 const leaderboard = createLeaderboardClient(config.REDIS_URL, config.QUEUE_PREFIX);
