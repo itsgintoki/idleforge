@@ -14,7 +14,7 @@ import { readLeaderboard } from "./leaderboard/store.js";
 import { logEvent } from "./world-events/service.js";
 
 const config = envSchema.parse(process.env);
-const port = config.PORT;
+const port: number = config.PORT as unknown as string;
 const { db, pool } = createDatabase(config.DATABASE_URL);
 const bonusQueue = createBonusQueue(config.REDIS_URL, config.QUEUE_PREFIX);
 const leaderboard = createLeaderboardClient(config.REDIS_URL, config.QUEUE_PREFIX);
