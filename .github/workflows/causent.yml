@@ -13,10 +13,276 @@ permissions:
 
 jobs:
   diagnose:
+    name: Diagnose failure
     if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.full_name == github.repository
-    uses: causent/causent/.github/workflows/ci-diagnose.yml@v2
-    with:
-      run_id: ${{ github.event.workflow_run.id }}
-      head_sha: ${{ github.event.workflow_run.head_sha }}
-      base_sha: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
-      agent: false
+    runs-on: ubuntu-latest
+    outputs:
+      classification: ${{ steps.diagnose.outputs.classification }}
+      refused: ${{ steps.diagnose.outputs.refused }}
+      pr: ${{ steps.revisions.outputs.pr }}
+    steps:
+      - name: Checkout failing commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve revisions
+        id: revisions
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          EVENT_PR_BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+        run: |
+          set -euo pipefail
+          head="$HEAD_SHA"
+          git checkout --force --detach "$head"
+
+          base="$EVENT_PR_BASE_SHA"
+          if [ -z "$base" ] || [ "$base" = "null" ]; then
+            git fetch --no-tags origin master || true
+            base="$(git merge-base HEAD origin/master 2>/dev/null || true)"
+          fi
+
+          pr="$EVENT_PR_NUMBER"
+          if [ -z "$pr" ] || [ "$pr" = "null" ]; then
+            pr=""
+          fi
+
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+
+      - name: Collect failed job logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          raw_log="$RUNNER_TEMP/causent-failed.raw.log"
+          gh run view "$RUN_ID" --repo "$REPOSITORY" --log-failed > "$raw_log" 2>&1 || true
+          sed -E \
+            -e 's/(authorization:[[:space:]]*bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig' \
+            -e 's/(authorization:[[:space:]]*)[^[:space:]]+/\1[REDACTED]/Ig' \
+            -e 's/((token|password|secret|api[_-]?key)[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/Ig' \
+            -e 's/(gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[0-9A-Z]{16})/[REDACTED]/g' \
+            "$raw_log" | head -c 262144 > "$RUNNER_TEMP/causent-failed.log" || true
+
+      - name: Install causent
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/causent/causent/releases/latest/download/causent_linux_amd64 -o "$RUNNER_TEMP/causent"
+          chmod +x "$RUNNER_TEMP/causent"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/causent" version
+
+      - name: Diagnose
+        id: diagnose
+        env:
+          INPUT_BASE: ${{ steps.revisions.outputs.base }}
+          INPUT_CI_LOG: ${{ runner.temp }}/causent-failed.log
+        run: |
+          set -euo pipefail
+          args=(diagnose --repo . --json --bundle "$RUNNER_TEMP/causent-bundle")
+
+          if [ -n "$INPUT_BASE" ]; then
+            args+=(--base "$INPUT_BASE")
+          fi
+          if [ -s "$INPUT_CI_LOG" ]; then
+            args+=(--ci-log "$INPUT_CI_LOG")
+          fi
+
+          status=0
+          causent "${args[@]}" > "$RUNNER_TEMP/causent-report.json" \
+            2> "$RUNNER_TEMP/causent-stderr.log" || status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+
+          classification="$(jq -r '.classification // "unknown"' "$RUNNER_TEMP/causent-report.json" || echo "unknown")"
+          refused="$(jq -r '.refused // false' "$RUNNER_TEMP/causent-report.json" || echo "false")"
+          echo "classification=$classification" >> "$GITHUB_OUTPUT"
+          echo "refused=$refused" >> "$GITHUB_OUTPUT"
+
+      - name: Upload diagnosis bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: causent-diagnosis-raw-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/causent-report.json
+            ${{ runner.temp }}/causent-stderr.log
+            ${{ runner.temp }}/causent-failed.log
+            ${{ runner.temp }}/causent-bundle
+          if-no-files-found: ignore
+
+  analyze:
+    name: Model analysis
+    needs: diagnose
+    if: needs.diagnose.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download deterministic diagnosis
+        uses: actions/download-artifact@v4
+        with:
+          name: causent-diagnosis-raw-${{ github.run_id }}
+          path: ${{ runner.temp }}/causent-raw
+
+      - name: Install causent
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/causent/causent/releases/latest/download/causent_linux_amd64 -o "$RUNNER_TEMP/causent"
+          chmod +x "$RUNNER_TEMP/causent"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Preserve deterministic report
+        if: env.GEMINI_API_KEY == ''
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/causent-final"
+          cp "$RUNNER_TEMP/causent-raw/causent-report.json" "$RUNNER_TEMP/causent-final/causent-report.json"
+
+      - name: Set up Go for in-runner gateway
+        if: env.GEMINI_API_KEY != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: Launch in-runner gateway & analyze with Gemini
+        if: env.GEMINI_API_KEY != ''
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo "Building causent-gateway..."
+          go install github.com/causent/causent/cmd/gateway@main
+
+          echo "Starting in-runner gateway on 127.0.0.1:8787..."
+          CAUSENT_GATEWAY_PROVIDER=gemini \
+          CAUSENT_GATEWAY_MODEL=gemini-3.1-flash-lite \
+          CAUSENT_GATEWAY_ADDR=127.0.0.1:8787 \
+          GEMINI_API_KEY="$GEMINI_API_KEY" \
+          "$(go env GOPATH)/bin/gateway" &
+          sleep 4
+
+          mkdir -p "$RUNNER_TEMP/causent-final"
+          CAUSENT_GATEWAY_ENDPOINT=http://127.0.0.1:8787 \
+          CAUSENT_GATEWAY_MODEL=gemini-3.1-flash-lite \
+          causent analyze \
+            --report "$RUNNER_TEMP/causent-raw/causent-report.json" \
+            --output "$RUNNER_TEMP/causent-final/causent-report.json"
+          echo "Model analysis completed successfully."
+
+      - name: Copy evidence artifacts
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/causent-raw/causent-stderr.log" "$RUNNER_TEMP/causent-final/causent-stderr.log" || true
+          cp "$RUNNER_TEMP/causent-raw/causent-failed.log" "$RUNNER_TEMP/causent-final/causent-failed.log" || true
+          cp -R "$RUNNER_TEMP/causent-raw/causent-bundle" "$RUNNER_TEMP/causent-final/causent-bundle" || true
+
+      - name: Upload final diagnosis
+        uses: actions/upload-artifact@v4
+        with:
+          name: causent-diagnosis-${{ github.run_id }}
+          path: ${{ runner.temp }}/causent-final
+          if-no-files-found: error
+
+  publish:
+    name: Publish diagnosis
+    needs: [diagnose, analyze]
+    if: needs.analyze.result == 'success' && needs.diagnose.outputs.pr != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download diagnosis result
+        uses: actions/download-artifact@v4
+        with:
+          name: causent-diagnosis-${{ github.run_id }}
+          path: ${{ runner.temp }}/causent-result
+
+      - name: Prepare diagnosis comment
+        env:
+          PR_NUMBER: ${{ needs.diagnose.outputs.pr }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/causent-result/causent-report.json"
+          test -s "$report"
+          classification="$(jq -r '.classification // "unknown"' "$report")"
+          refused="$(jq -r '.refused // false' "$report")"
+          failures="$(jq -r '.baseline.failures // 0' "$report")"
+          attempts="$(jq -r '.baseline.attempts // 0' "$report")"
+          command="$(jq -r 'if (.command | type) == "array" then (.command | join(" ")) else (.command // "not configured") end' "$report")"
+          base_passes="$(jq -r '.comparison.base.passes // 0' "$report")"
+          base_attempts="$(jq -r '.comparison.base.attempts // 0' "$report")"
+          files="$(jq -r '(.localization.likely_files // []) | if length == 0 then "not localized" else join(", ") end' "$report")"
+          candidate="$(jq -r '(.localization.candidate_commits[0] // {}) | if .sha then ((.sha[0:7]) + " — " + (.subject // "")) else "not identified" end' "$report")"
+          confidence="$(jq -r '((.confidence // 0) * 100 | floor | tostring) + "%"' "$report")"
+          failure="$(jq -r '.baseline.results[0].stderr_excerpt // ""' "$report" | grep -E -- '--- FAIL:|^FAIL|error TS' | head -3 | tr '\n' ' ' || true)"
+          artifact_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          agent_section=""
+          hypotheses="$(jq -r '(.agent.hypotheses // []) | if length == 0 then "" else map("- **" + .statement + "** *(Confidence: " + ((.confidence * 100 | floor | tostring) + "%, Component: `" + .affected_component + "`)") | join("\n") end' "$report")"
+          if [ -n "$hypotheses" ]; then
+            agent_section=$(cat <<AEOF
+
+          ### Gemini AI Root-Cause Hypotheses
+          ${hypotheses}
+          AEOF
+          )
+          fi
+
+          body=$(cat <<EOF
+          ## Causent diagnosis
+
+          **Classification:** ${classification}<br>
+          **Confidence:** ${confidence}<br>
+          **Command:** ${command}
+
+          **Reproduction:** ${failures}/${attempts} head attempts failed; ${base_passes}/${base_attempts} base attempts passed.<br>
+          **Refused:** ${refused}
+
+          **Likely changed files:** ${files}<br>
+          **Candidate commit:** ${candidate}
+
+          **Observed failure:** ${failure:-No failure line extracted}
+          ${agent_section}
+
+          **Uncertainty:** Review the full evidence before treating the localization as a confirmed root cause.
+
+          [View workflow run and diagnosis artifact](${artifact_url})
+          EOF
+          )
+          printf '%s\n' "$body" > "$RUNNER_TEMP/causent-comment.md"
+
+      - name: Publish diagnosis comment
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.diagnose.outputs.pr }}
+          COMMENT_PATH: ${{ runner.temp }}/causent-comment.md
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            const issueNumber = Number(process.env.PR_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber < 1) {
+              throw new Error(`Invalid pull request number: ${process.env.PR_NUMBER}`);
+            }
+
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+              });
+            } catch (error) {
+              core.setFailed(`Unable to publish diagnosis comment: ${error.status ?? 'unknown'} ${error.message}`);
+            }
