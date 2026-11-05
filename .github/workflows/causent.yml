@@ -228,7 +228,7 @@ jobs:
           artifact_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           agent_section=""
-          hypotheses="$(jq -r '(.agent.hypotheses // []) | if length == 0 then "" else map("- **" + .statement + "** *(Confidence: " + ((.confidence * 100 | floor | tostring) + "%, Component: `" + .affected_component + "`)") | join("\n") end' "$report")"
+          hypotheses="$(jq -r '(.agent.hypotheses // []) | map("- **" + .statement + "** *(Confidence: " + (.confidence * 100 | floor | tostring) + "%, Component: `" + .affected_component + "`)*") | join("\n")' "$report")"
           if [ -n "$hypotheses" ]; then
             agent_section=$(cat <<AEOF
 
