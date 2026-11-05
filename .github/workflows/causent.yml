@@ -160,7 +160,9 @@ jobs:
           echo "Building causent-gateway..."
           go install github.com/causent/causent/cmd/gateway@main
 
+          mkdir -p "$HOME/.causent"
           echo "Starting in-runner gateway on 127.0.0.1:8787..."
+          CAUSENT_DB="$HOME/.causent/investigations.db" \
           CAUSENT_GATEWAY_PROVIDER=gemini \
           CAUSENT_GATEWAY_MODEL=gemini-3.1-flash-lite \
           CAUSENT_GATEWAY_ADDR=127.0.0.1:8787 \
