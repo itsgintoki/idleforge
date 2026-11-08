@@ -4,6 +4,29 @@ Learning project: a TypeScript API for an idle-game economy. Strict TypeScript,
 Express, PostgreSQL (Drizzle ORM), Redis + BullMQ, Zod validation, Argon2id
 passwords, and JWT access tokens.
 
+**Quick facts:** Node.js 22 · TypeScript (strict) · Express 5 · PostgreSQL 18.6 · Redis 8.10.1 · Drizzle · BullMQ · Vitest (72 tests) · Railway packaging
+**Case study:** [IdleForge — portfolio](https://itsgintoki.github.io/web/work/idleforge.html)
+
+## Contents
+
+- [Project structure](#project-structure)
+- [Architecture](#architecture)
+- [Routes](#routes)
+- [Database](#database)
+- [Local setup](#local-setup)
+- [Schema workflow](#schema-workflow)
+- [Verification](#verification)
+- [Signup](#signup)
+- [Login credential verification](#login-credential-verification)
+- [Login endpoint and access tokens](#login-endpoint-and-access-tokens)
+- [Protected player state](#protected-player-state)
+- [Offline collection](#offline-collection)
+- [Building purchases](#building-purchases)
+- [Scheduled world events](#scheduled-world-events)
+- [Leaderboard](#leaderboard)
+- [Observability and deployment](#observability-and-deployment)
+- [Database version upgrades](#database-version-upgrades)
+
 ## Project structure
 
 ```text
@@ -46,11 +69,22 @@ split only when a file becomes hard to navigate.
 
 ## Architecture
 
-```text
-client -> API (server.js) ---> PostgreSQL (economy, idempotency, outbox, ledger)
-client -> API ----------------> Redis (rate limits, leaderboard, BullMQ queue)
-scheduler (one-shot) ---------> Redis (registers hourly schedule, exits)
-worker -----------------------> PostgreSQL + Redis (outbox, bonuses, retention, leaderboard)
+```mermaid
+flowchart LR
+    Client["Client"]
+    API["Express API<br/>server.ts"]
+    PG[("PostgreSQL<br/>economy · idempotency · outbox · ledger")]
+    Redis[("Redis<br/>rate limits · leaderboard · BullMQ")]
+    Worker["Worker<br/>bonuses · outbox · retention · leaderboard"]
+    Scheduler["Scheduler<br/>one-shot cron registration"]
+
+    Client -->|"HTTP + JWT"| API
+    API -->|"commits first"| PG
+    API -->|"best-effort projection sync"| Redis
+    Worker --> PG
+    Worker --> Redis
+    Scheduler -->|"upsert schedule"| Redis
+    Redis -->|"jobs"| Worker
 ```
 
 - **API** never processes jobs. It commits to PostgreSQL first, then refreshes
@@ -431,6 +465,23 @@ repeated key for the same player is checked against its saved building:
 | Same key and building | Return the saved result without changing the economy |
 | Same key, different building | 409 `idempotency_key_reused`; the original command stays unchanged |
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as Express
+    participant D as PostgreSQL
+
+    C->>A: POST /player/purchases<br/>Idempotency-Key
+    A->>D: SELECT player FOR KEY SHARE
+    A->>D: INSERT purchase_commands (reserve key)
+    A->>D: SELECT resource FOR UPDATE
+    A->>D: guarded debit + settle at old rate<br/>upsert building + raise rate<br/>UPDATE saved result
+    D-->>A: commit
+    A-->>C: 200 purchase result
+    Note over A,D: a concurrent same-key request waits on the primary key,<br/>then reads the saved result instead of charging twice
+```
+
 A replay returns the original balance, credited amount, level, rate, and timestamp,
 even if later commands have changed the current state. Use `GET /player/me` to
 read current state. Both successful outcomes and expected domain failures such as
@@ -519,6 +570,27 @@ the ledger entries, and commits `last_player_id` plus the cumulative
 crash between batches resumes from the cursor, and no committed batch is applied
 twice.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant API as Admin API
+    participant D as PostgreSQL
+    participant W as Worker
+    participant R as Redis
+
+    API->>D: INSERT event_outbox (commit intent)
+    API->>R: best-effort enqueue (stable occurrence ID)
+    API-->>API: 202 accepted, durable
+    W->>D: drain pending outbox rows
+    W->>D: reserve world_events occurrence
+    loop BONUS_BATCH_SIZE batches
+        W->>D: lock batch, credit gold, insert ledger,<br/>commit cursor + players_rewarded
+    end
+    W->>D: set applied_at
+    W->>R: refresh leaderboard
+    Note over W,D: a crash between batches resumes from last_player_id<br/>applied occurrence rows are never deleted
+```
+
 The occurrence ID is a primary key: a concurrent duplicate waits on the row lock,
 then either replays the completed outcome or resumes an incomplete run. Scheduled
 runs also take a transaction-scoped advisory lock on the UTC hour and check for an
@@ -592,9 +664,14 @@ build with PostgreSQL/Redis services. `Dockerfile` + `compose.yaml` package
 
 ## Leaderboard
 
-```text
-PostgreSQL lifetimeGoldEarned -> float64 rank score + exact six-decimal hash
-                              -> Redis ZSET + HASH -> ranked reads
+```mermaid
+flowchart LR
+    PG[("PostgreSQL<br/>player_resources")] -->|"keyset pages"| S["Snapshot reader"]
+    S -->|"ZADD + HSET batches"| Z[("Staging ZSET<br/>+ exact HASH")]
+    Z -->|"Lua validate + RENAME"| L[("Live ZSET<br/>+ exact HASH")]
+    L -->|"set :ready marker (90 s)"| M[":ready"]
+    API["Leaderboard API"] -->|"ZRANGE + HMGET exact"| L
+    API -->|"validate marker + cardinality"| M
 ```
 
 `GET /leaderboard?limit=20` requires a Bearer token. `limit` defaults to 20 and
