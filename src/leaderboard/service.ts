@@ -1,9 +1,13 @@
 import type { Database } from "../db/client.js";
 import { logEvent } from "../world-events/service.js";
 import type { LeaderboardClient } from "./client.js";
-import { findLifetimeGold, readLeaderboardSnapshot } from "./queries.js";
-import { toLeaderboardScore } from "./score.js";
-import { publishLeaderboardSnapshot, writeLeaderboardScore } from "./store.js";
+import { findLifetimeGold, iterateLeaderboardSnapshot } from "./queries.js";
+import {
+  leaderboardSnapshotBatchSize,
+  publishLeaderboardSnapshot,
+  writeLeaderboardScore,
+  type PreparedScore,
+} from "./store.js";
 
 export async function syncPlayerLeaderboard(
   db: Database,
@@ -15,18 +19,21 @@ export async function syncPlayerLeaderboard(
   try {
     const lifetimeGold = await findLifetimeGold(db, playerId);
 
-    if (lifetimeGold === null) await redis.zrem(key, playerId);
-    else await writeLeaderboardScore(redis, key, playerId, lifetimeGold);
+    if (lifetimeGold === null) {
+      await redis.multi().zrem(key, playerId).hdel(leaderboard.exactKey, playerId).exec();
+    } else {
+      await writeLeaderboardScore(leaderboard, playerId, lifetimeGold);
+    }
   } catch (error) {
-    const invalidScore = error instanceof RangeError || error instanceof TypeError;
+    const invalidScore = error instanceof TypeError;
     if (invalidScore) {
       try {
-        await redis.del(`${key}:ready`);
+        await redis.del(leaderboard.readyKey);
       } catch (invalidationError) {
         const message = invalidationError instanceof Error ? invalidationError.message : String(invalidationError);
         logEvent("leaderboard_ready_invalidation_failed", {
-          playerId, reason: "invalid_score", level: "error", error: message,
-        });
+          playerId, reason: "invalid_score", error: message,
+        }, "error");
       }
     }
     logEvent("leaderboard_player_sync_failed", {
@@ -37,44 +44,36 @@ export async function syncPlayerLeaderboard(
 
 export type ReconcileResult =
   | { ok: true; players: number; published: boolean }
-  | { ok: false; reason: "score_out_of_range" | "invalid_score" | "unavailable" };
+  | { ok: false; reason: "invalid_score" | "unavailable" };
 
 export async function reconcileLeaderboard(
   db: Database,
   leaderboard: LeaderboardClient,
 ): Promise<ReconcileResult> {
-  const { redis, key } = leaderboard;
+  const { redis } = leaderboard;
 
   try {
-    const snapshot = await readLeaderboardSnapshot(db);
-
-    const preparedScores = snapshot.players.map((player) => ({
-      playerId: player.playerId, score: toLeaderboardScore(player.lifetimeGoldEarned),
-    }));
-
-    const published = await publishLeaderboardSnapshot(
-      redis,
-      key,
-      preparedScores,
-      snapshot.startedAt,
-    );
-
-    return {
-      ok: true,
-      players: preparedScores.length,
-      published,
+    const startedAt = new Date().toISOString();
+    const pages = async function* (): AsyncGenerator<PreparedScore[]> {
+      for await (const page of iterateLeaderboardSnapshot(db, leaderboardSnapshotBatchSize)) {
+        yield page.map((row) => ({
+          playerId: row.playerId, lifetimeGoldEarned: row.lifetimeGoldEarned,
+        }));
+      }
     };
+
+    const result = await publishLeaderboardSnapshot(leaderboard, pages(), startedAt);
+    return { ok: true, players: result.players, published: result.published };
   } catch (error) {
-    const reason = error instanceof RangeError ? "score_out_of_range"
-      : error instanceof TypeError ? "invalid_score" : "unavailable";
-    if (reason !== "unavailable") {
+    const reason = error instanceof TypeError ? "invalid_score" : "unavailable";
+    if (reason === "invalid_score") {
       try {
-        await redis.del(`${key}:ready`);
+        await redis.del(leaderboard.readyKey);
       } catch (invalidationError) {
         const message = invalidationError instanceof Error ? invalidationError.message : String(invalidationError);
         logEvent("leaderboard_ready_invalidation_failed", {
-          reason, level: "error", error: message,
-        });
+          reason, error: message,
+        }, "error");
       }
     }
     logEvent("leaderboard_reconcile_failed", { reason });

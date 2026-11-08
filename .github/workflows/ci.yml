@@ -50,7 +50,9 @@ jobs:
       - run: npm run verify
       - run: npm run build
       - run: docker build -t idleforge:ci .
-      - name: Placeholder for revision-phase integration tests
-        run: |
-          echo "No retained test suite yet. Wire 'npm test' here during revision phase."
-          echo "Services above prove postgres/redis boot for that phase."
+      - name: Run test suite
+        env:
+          TEST_DATABASE_URL: postgresql://idleforge:idleforge_local@127.0.0.1:5432/idleforge
+          TEST_REDIS_URL: redis://127.0.0.1:6379
+          JWT_SECRET: ci-test-secret-0123456789abcdef0123456789abcdef0123456789abcdef
+        run: npm test

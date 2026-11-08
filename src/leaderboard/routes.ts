@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import { createAuthentication, type VerifyAccessToken } from "../auth/tokens.js";
 import type { LeaderboardPage } from "./store.js";
@@ -13,10 +13,13 @@ const leaderboardQuerySchema = z.strictObject({
     .pipe(z.number().int().min(1).max(100)).default(20),
 });
 
-export function createLeaderboardRouter(dependencies: LeaderboardDependencies): Router {
+export function createLeaderboardRouter(
+  dependencies: LeaderboardDependencies,
+  rateLimiter: RequestHandler,
+): Router {
   const router = Router();
 
-  router.use(createAuthentication(dependencies.verifyAccessToken));
+  router.use(createAuthentication(dependencies.verifyAccessToken), rateLimiter);
 
   router.get("/", async (req, res) => {
     res.set("Cache-Control", "no-store");

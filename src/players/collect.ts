@@ -2,6 +2,7 @@ import { sql, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Database } from "../db/client.js";
 import { players } from "../db/schema.js";
+import { getRequestId } from "../observability.js";
 
 export const maximumOfflineSeconds = 8 * 60 * 60;
 
@@ -17,7 +18,11 @@ export type CollectResult =
   | ({ ok: true } & z.infer<typeof collectionSchema>)
   | { ok: false; reason: "player_not_found" | "resource_not_found" };
 
-export async function collect(db: Database, playerId: string): Promise<CollectResult> {
+export async function collect(
+  db: Database,
+  playerId: string,
+  referenceId = getRequestId(),
+): Promise<CollectResult> {
   const result = await db.execute(sql`
     WITH locked AS MATERIALIZED (
       SELECT * FROM player_resources WHERE player_id = ${playerId}::uuid FOR UPDATE
@@ -30,16 +35,24 @@ export async function collect(db: Database, playerId: string): Promise<CollectRe
           greatest(0::numeric, extract(epoch FROM (collected_at - last_collected_at))))
         * gold_per_second, 6)::numeric(30, 6) AS credited
       FROM timed
+    ), updated AS (
+      UPDATE player_resources AS resource
+      SET gold = earned.gold + earned.credited,
+          lifetime_gold_earned = earned.lifetime_gold_earned + earned.credited,
+          last_collected_at = earned.collected_at
+      FROM earned
+      WHERE resource.player_id = earned.player_id
+      RETURNING earned.credited AS credited, resource.gold AS balance,
+        resource.lifetime_gold_earned AS "lifetimeEarned",
+        resource.gold_per_second AS rate, resource.last_collected_at AS "collectedAt",
+        resource.player_id AS "playerId"
+    ), inserted AS (
+      INSERT INTO ledger_entries (player_id, amount, kind, reference_id)
+      SELECT "playerId", credited, 'collect', ${referenceId ?? null}
+      FROM updated WHERE credited <> 0
+      RETURNING id
     )
-    UPDATE player_resources AS resource
-    SET gold = earned.gold + earned.credited,
-        lifetime_gold_earned = earned.lifetime_gold_earned + earned.credited,
-        last_collected_at = earned.collected_at
-    FROM earned
-    WHERE resource.player_id = earned.player_id
-    RETURNING earned.credited AS credited, resource.gold AS balance,
-      resource.lifetime_gold_earned AS "lifetimeEarned",
-      resource.gold_per_second AS rate, resource.last_collected_at AS "collectedAt"
+    SELECT credited, balance, "lifetimeEarned", rate, "collectedAt" FROM updated
   `);
   const row: unknown = result.rows[0];
   if (row !== undefined) return { ok: true, ...collectionSchema.parse(row) };

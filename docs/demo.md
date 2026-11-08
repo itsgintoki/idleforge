@@ -1,5 +1,9 @@
 # Demo surface
 
+The retained Vitest suite (`npm test`) is the authoritative proof of concurrency,
+duplicate delivery, recovery, retention, and ledger guarantees. The script below
+is a thin manual demo.
+
 ## Automated demo
 
 `scripts/demo.mjs` exercises the full economy against a local API:
@@ -22,15 +26,3 @@ Admin demo (bonus + failed-job inspection) needs an admin token:
 # promote the demo user to admin by its player ID, then:
 ADMIN_TOKEN=<adminAccessToken> OCCURRENCE_ID=$(node -e "console.log(crypto.randomUUID())") npm run demo
 ```
-
-## Manual reproductions
-
-- `scripts/repro-idempotency.sh TOKEN=<token>`: same key twice → identical body;
-  different building with the same key → 409.
-- `scripts/repro-concurrency.sh TOKEN=<token>`: 10 parallel collects → checkpoint
-  advances once per interval, no double-credit (compare `lifetimeEarned` deltas).
-- `scripts/repro-reconciliation.sh`: deletes leaderboard keys in Redis, shows 503,
-  runs `npm run leaderboard:rebuild`, shows 200 again.
-
-All scripts are intentionally thin `curl` wrappers so reviewers can read them in
-under a minute.

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import { createAuthentication, type VerifyAccessToken } from "../auth/tokens.js";
 import { logEvent, manualBonusSchema } from "./service.js";
@@ -7,12 +7,17 @@ import type { FailedBonusJob } from "./queue.js";
 export type WorldEventDependencies = {
   verifyAccessToken: VerifyAccessToken;
   isAdmin: (playerId: string) => Promise<boolean>;
-  enqueueBonus: (occurrenceId: string) => Promise<{ jobId: string | undefined; occurrenceId: string }>;
+  enqueueBonus: (occurrenceId: string) => Promise<{
+    jobId: string | undefined; occurrenceId: string; status: "accepted";
+  }>;
   getFailedJobs: (limit: number) => Promise<readonly FailedBonusJob[]>;
 };
-export function createWorldEventRouter(dependencies: WorldEventDependencies) {
+export function createWorldEventRouter(
+  dependencies: WorldEventDependencies,
+  rateLimiter: RequestHandler,
+) {
   const router = Router();
-  router.use(createAuthentication(dependencies.verifyAccessToken));
+  router.use(createAuthentication(dependencies.verifyAccessToken), rateLimiter);
   router.use(async (req, res, next) => {
     if (!req.auth || !(await dependencies.isAdmin(req.auth.sub))) {
       res.status(403).json({ error: "forbidden" });
@@ -27,13 +32,9 @@ export function createWorldEventRouter(dependencies: WorldEventDependencies) {
       res.status(400).json({ error: "invalid_input" });
       return;
     }
-    try {
-      const queued = await dependencies.enqueueBonus(parsed.data.occurrenceId);
-      logEvent("bonus_enqueued", { ...queued, playerId: req.auth?.sub });
-      res.set("Cache-Control", "no-store").status(202).json(queued);
-    } catch {
-      res.status(503).json({ error: "queue_unavailable" });
-    }
+    const queued = await dependencies.enqueueBonus(parsed.data.occurrenceId);
+    logEvent("bonus_enqueued", { ...queued, playerId: req.auth?.sub });
+    res.set("Cache-Control", "no-store").status(202).json(queued);
   });
   router.get("/jobs/failed", async (req, res) => {
     const parsed = z.strictObject({

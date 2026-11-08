@@ -1,9 +1,8 @@
-import { eq } from "drizzle-orm";
+import { eq, gt } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { playerResources } from "../db/schema.js";
 
 export type AuthoritativeScore = { playerId: string; lifetimeGoldEarned: string };
-export type LeaderboardSnapshot = { startedAt: string; players: AuthoritativeScore[] };
 
 export async function findLifetimeGold(db: Database, playerId: string): Promise<string | null> {
   const [resource] = await db.select({ lifetimeGoldEarned: playerResources.lifetimeGoldEarned })
@@ -11,13 +10,23 @@ export async function findLifetimeGold(db: Database, playerId: string): Promise<
   return resource?.lifetimeGoldEarned ?? null;
 }
 
-export async function readLeaderboardSnapshot(db: Database): Promise<LeaderboardSnapshot> {
-  const startedAt = new Date().toISOString();
+export async function* iterateLeaderboardSnapshot(
+  db: Database,
+  batchSize = 1000,
+): AsyncGenerator<AuthoritativeScore[]> {
+  let cursor: string | null = null;
+  for (;;) {
+    const rows = await db.select({
+      playerId: playerResources.playerId,
+      lifetimeGoldEarned: playerResources.lifetimeGoldEarned,
+    }).from(playerResources)
+      .where(cursor === null ? undefined : gt(playerResources.playerId, cursor))
+      .orderBy(playerResources.playerId)
+      .limit(batchSize);
 
-  const players = await db.select({
-    playerId: playerResources.playerId,
-    lifetimeGoldEarned: playerResources.lifetimeGoldEarned,
-  }).from(playerResources);
-
-  return { startedAt, players };
+    if (rows.length === 0) return;
+    yield rows;
+    if (rows.length < batchSize) return;
+    cursor = rows[rows.length - 1]?.playerId ?? null;
+  }
 }

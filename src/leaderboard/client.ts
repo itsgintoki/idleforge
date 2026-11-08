@@ -1,7 +1,12 @@
 import { Redis } from "ioredis";
 import { logEvent } from "../world-events/service.js";
 
-export type LeaderboardClient = { redis: Redis; key: string };
+export type LeaderboardClient = {
+  redis: Redis;
+  key: string;
+  exactKey: string;
+  readyKey: string;
+};
 
 export function createLeaderboardClient(redisUrl: string, prefix: string): LeaderboardClient {
   const redis = new Redis(redisUrl, {
@@ -17,5 +22,5 @@ export function createLeaderboardClient(redisUrl: string, prefix: string): Leade
 
   const key = `${prefix}:leaderboard:lifetime-gold`;
 
-  return { redis, key };
+  return { redis, key, exactKey: `${key}:exact`, readyKey: `${key}:ready` };
 }

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { httpRequestDuration, httpRequestsTotal } from "./metrics.js";
 
 type RequestContext = { requestId: string };
 
@@ -30,6 +31,11 @@ export function requestLoggerMiddleware(req: Request, res: Response, next: NextF
   const startedAt = Date.now();
   res.on("finish", () => {
     const requestId = req.requestId ?? getRequestId();
+    const durationMs = Date.now() - startedAt;
+    const route = req.route === undefined ? "unmatched" : `${req.baseUrl}${String(req.route.path)}`;
+    const labels = { method: req.method, route, status: String(res.statusCode) };
+    httpRequestDuration.observe(labels, durationMs / 1000);
+    httpRequestsTotal.inc(labels);
     console.log(JSON.stringify({
       time: new Date().toISOString(),
       level: "info",
@@ -38,7 +44,7 @@ export function requestLoggerMiddleware(req: Request, res: Response, next: NextF
       method: req.method,
       path: req.path,
       status: res.statusCode,
-      durationMs: Date.now() - startedAt,
+      durationMs,
     }));
   });
   next();

@@ -2,7 +2,7 @@ import { purchaseRequestSchema, type PurchaseInput } from "../buildings/catalogu
 import type { PurchaseResult } from "./purchase.js";
 import { z } from "zod";
 import type { CollectResult } from "./collect.js";
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { createAuthentication, type VerifyAccessToken } from "../auth/tokens.js";
 import type { PlayerState } from "./queries.js";
 
@@ -15,9 +15,9 @@ export type PlayerDependencies = {
   findPlayerState: (playerId: string) => Promise<PlayerState | null>;
 };
 
-export function createPlayerRouter(dependencies: PlayerDependencies) {
+export function createPlayerRouter(dependencies: PlayerDependencies, rateLimiter: RequestHandler) {
   const router = Router();
-  router.use(createAuthentication(dependencies.verifyAccessToken));
+  router.use(createAuthentication(dependencies.verifyAccessToken), rateLimiter);
 
   router.get("/me", async (req, res) => {
     if (!req.auth) {

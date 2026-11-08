@@ -1,6 +1,6 @@
 import { Queue, type JobsOptions } from "bullmq";
 import { Redis } from "ioredis";
-import { bonusJobSchema, goldBonusCron, goldBonusJobName, goldBonusSchedulerId, logEvent, worldEventQueueName, type BonusJobData } from "./service.js";
+import { goldBonusCron, goldBonusJobName, goldBonusSchedulerId, logEvent, worldEventQueueName, type BonusJobData } from "./service.js";
 
 export const bonusJobOptions: JobsOptions = {
   attempts: 5,
@@ -25,14 +25,15 @@ export function createBonusQueue(redisUrl: string, prefix: string) {
     connection, prefix, defaultJobOptions: bonusJobOptions,
   });
   queue.on("error", () => logEvent("bonus_queue_error"));
+
+  async function enqueueJob(data: BonusJobData, jobId: string) {
+    if (connection.status !== "ready") throw new Error("Bonus queue unavailable");
+    return queue.add(goldBonusJobName, data, { jobId });
+  }
+
   return {
     queue,
-    async enqueueManual(occurrenceId: string): Promise<{ jobId: string | undefined; occurrenceId: string }> {
-      const data = bonusJobSchema.parse({ source: "manual", version: 1, occurrenceId: occurrenceId.toLowerCase() });
-      if (connection.status !== "ready") throw new Error("Bonus queue unavailable");
-      const job = await queue.add(goldBonusJobName, data, { jobId: `manual-${occurrenceId.toLowerCase()}` });
-      return { jobId: job.id, occurrenceId: `manual-${occurrenceId.toLowerCase()}` };
-    },
+    enqueueJob,
     async waitUntilReady(): Promise<void> {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -62,6 +63,8 @@ export function createBonusQueue(redisUrl: string, prefix: string) {
     },
   };
 }
+
+export type BonusQueue = ReturnType<typeof createBonusQueue>;
 
 export async function registerBonusSchedule(queue: Queue<BonusJobData>): Promise<void> {
   await queue.upsertJobScheduler(goldBonusSchedulerId, { pattern: goldBonusCron, tz: "UTC" }, {

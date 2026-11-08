@@ -6,6 +6,8 @@
   },
   "include": [
     "src",
-    "drizzle.config.ts"
+    "tests",
+    "drizzle.config.ts",
+    "vitest.config.ts"
   ]
 }

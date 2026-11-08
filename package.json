@@ -6,21 +6,25 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node --env-file-if-exists=.env dist/server.js",
+    "start": "node --env-file-if-exists=.env --import ./dist/telemetry.js dist/server.js",
     "typecheck": "tsc -p tsconfig.check.json",
     "db:up": "docker compose up -d --wait postgres",
     "db:stop": "docker compose stop postgres",
-    "db:generate": "node --env-file=.env node_modules/drizzle-kit/bin.cjs generate",
-    "db:migrate": "node --env-file=.env node_modules/drizzle-kit/bin.cjs migrate",
-    "dev": "node --env-file=.env --watch --import tsx src/server.ts",
+    "db:generate": "node --env-file-if-exists=.env node_modules/drizzle-kit/bin.cjs generate",
+    "db:migrate": "node --env-file-if-exists=.env node_modules/drizzle-kit/bin.cjs migrate",
+    "dev": "node --env-file=.env --watch --import tsx --import ./src/telemetry.ts src/server.ts",
     "verify": "npm run typecheck && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "services:up": "docker compose up -d --wait postgres redis",
     "services:stop": "docker compose stop postgres redis",
-    "worker": "node --env-file=.env dist/worker.js",
-    "worker:dev": "node --env-file=.env --watch --import tsx src/worker.ts",
+    "worker": "node --env-file=.env --import ./dist/telemetry.js dist/worker.js",
+    "worker:dev": "node --env-file=.env --watch --import tsx --import ./src/telemetry.ts src/worker.ts",
     "scheduler": "node --env-file=.env dist/scheduler.js",
     "scheduler:dev": "node --env-file=.env --watch --import tsx src/scheduler.ts",
     "leaderboard:rebuild": "node --env-file=.env --import tsx src/leaderboard/rebuild.ts",
+    "retention:run": "node --env-file=.env --import tsx src/maintenance/run.ts",
+    "ledger:verify": "node --env-file=.env --import tsx src/ledger/run.ts",
     "load:test": "node scripts/load-test.mjs",
     "demo": "node scripts/demo.mjs"
   },
@@ -34,9 +38,13 @@
     "@types/pg": "^8.23.1",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
   },
   "dependencies": {
+    "@opentelemetry/auto-instrumentations-node": "^0.83.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.301.0",
+    "@opentelemetry/sdk-node": "^0.301.0",
     "argon2": "^0.45.1",
     "bullmq": "^6.3.4",
     "drizzle-orm": "^0.45.2",
@@ -44,6 +52,7 @@
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0",
+    "prom-client": "^15.1.3",
     "zod": "^4.5.4"
   }
 }

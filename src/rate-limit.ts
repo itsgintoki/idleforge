@@ -1,42 +1,63 @@
-import type { NextFunction, Request, Response } from "express";
+import type { NextFunction, Request, RequestHandler, Response } from "express";
+import { Redis } from "ioredis";
+import { rateLimitDegradedTotal } from "./metrics.js";
+import { logEvent } from "./world-events/service.js";
 
 export type RateLimitOptions = {
   windowMs: number;
   max: number;
 };
 
-type Bucket = { count: number; resetAt: number };
+export type RedisRateLimiterOptions = RateLimitOptions & {
+  client: Redis;
+  prefix: string;
+  name: string;
+  key: (req: Request) => string;
+};
 
-export function createRateLimiter(options: RateLimitOptions, key: (req: Request) => string) {
-  const buckets = new Map<string, Bucket>();
-  const windowMs = options.windowMs;
-  const max = options.max;
+const fixedWindowScript = `
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return { current, redis.call('PTTL', KEYS[1]) }
+`;
 
-  function prune(now: number): void {
-    if (buckets.size < 1000) return;
-    for (const [k, bucket] of buckets) {
-      if (bucket.resetAt <= now) buckets.delete(k);
-    }
-  }
+export function createRateLimitClient(redisUrl: string): Redis {
+  const client = new Redis(redisUrl, {
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    connectTimeout: 2000,
+    commandTimeout: 500,
+  });
+  client.on("error", () => logEvent("rate_limit_redis_error"));
+  return client;
+}
+
+export function createRateLimiter(options: RedisRateLimiterOptions): RequestHandler {
+  const { client, prefix, name, windowMs, max, key } = options;
+  let lastDegradedLog = 0;
 
   return function rateLimiter(req: Request, res: Response, next: NextFunction): void {
-    const now = Date.now();
-    prune(now);
-    const bucketKey = key(req);
-    const existing = buckets.get(bucketKey);
-    if (existing === undefined || existing.resetAt <= now) {
-      buckets.set(bucketKey, { count: 1, resetAt: now + windowMs });
-      next();
-      return;
-    }
-    existing.count += 1;
-    if (existing.count > max) {
-      const retryAfterSeconds = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
-      res.set("Retry-After", String(retryAfterSeconds));
-      res.status(429).json({ error: "rate_limited" });
-      return;
-    }
-    next();
+    const bucketKey = `${prefix}:ratelimit:${name}:${key(req)}`;
+    void client.eval(fixedWindowScript, 1, bucketKey, String(windowMs))
+      .then((raw) => {
+        const [count = 0, ttl = 0] = raw as [number | string, number | string];
+        if (Number(count) > max) {
+          const retryAfterSeconds = Math.max(1, Math.ceil(Number(ttl) / 1000));
+          res.set("Retry-After", String(retryAfterSeconds));
+          res.status(429).json({ error: "rate_limited" });
+          return;
+        }
+        next();
+      })
+      .catch(() => {
+        rateLimitDegradedTotal.inc({ name });
+        const now = Date.now();
+        if (now - lastDegradedLog > 10_000) {
+          lastDegradedLog = now;
+          logEvent("rate_limit_degraded", { name }, "error");
+        }
+        next();
+      });
   };
 }
 

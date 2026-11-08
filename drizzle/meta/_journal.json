@@ -36,6 +36,48 @@
       "when": 1788974852199,
       "tag": "0004_dazzling_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794142365538,
+      "tag": "0005_dizzy_gorilla_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794142493605,
+      "tag": "0006_premium_garia",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794142647225,
+      "tag": "0007_woozy_wilson_fisk",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794142975593,
+      "tag": "0008_exotic_zarda",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794143060105,
+      "tag": "0009_nebulous_the_liberteens",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794143113936,
+      "tag": "0010_ledger_lifetime_baseline",
+      "breakpoints": true
     }
   ]
 }
