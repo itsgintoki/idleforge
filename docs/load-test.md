@@ -25,7 +25,12 @@ TOKEN=<accessToken> npm run load:test
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 2026-09-28 | `/health` (liveness, DB/Redis down) | 200 | 20 | 14.8 | 35.1 | 875 | 0 |
 | 2026-09-28 | `/health` (services up, worker running) | 300 | 20 | 11.6 | 27.9 | 1189 | 0 |
-| _pending_ | `/health` + auth reads (TOKEN set) | | | | | | |
+| 2026-11-08 | `/health` + auth reads (`TOKEN` set) | 300 | 10 | 15.92 | 28.54 | 519.3 | 0 |
+
+Auth run: 100 requests each to `/health`, `/player/me`, and `/leaderboard?limit=20`;
+all 300 returned 200. The 300-request run used the seeded demo player. A separate
+600-request per-endpoint run on a fresh player measured p95 23.0 ms on
+`/player/me` and 22.2 ms on `/leaderboard`, also with 0 errors.
 
 Rate-limit check 2026-09-28: 310x `GET /player/me` unauthenticated → 299x 401
 then 429 `rate_limited` with `Retry-After` (limit 300/min). Verified working.
