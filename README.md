@@ -5,7 +5,7 @@ PostgreSQL (Drizzle ORM), Redis + BullMQ, Zod validation, Argon2id passwords, an
 JWT access tokens.
 
 **Quick facts:** Node.js 22 · TypeScript (strict) · Express 5 · PostgreSQL 18.6 · Redis 8.10.1 · Drizzle · BullMQ · Vitest (72 tests) · Railway packaging
-**Case study:** [IdleForge — portfolio](https://itsgintoki.github.io/web/work/idleforge.html)
+**Case study:** [IdleForge — portfolio](https://anki.site/work/idleforge.html)
 
 ## Contents
 
